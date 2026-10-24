@@ -17,6 +17,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
+import dev.n2k02.updater.hasPendingUpdate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
