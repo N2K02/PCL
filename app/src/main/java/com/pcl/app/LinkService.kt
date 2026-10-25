@@ -66,6 +66,13 @@ class LinkService : Service() {
         const val ACTION_AUDIO_DOWN = "com.pcl.app.AUDIO_DOWN"
         const val ACTION_AUDIO_UP = "com.pcl.app.AUDIO_UP"
         const val ACTION_AUDIO_SPEAKER = "com.pcl.app.AUDIO_SPEAKER"
+
+        /** The output the route switch goes to: earpiece from the speaker, else the speaker. */
+        fun otherRoute(route: String): String = if (route == "SPEAKER") "EARPIECE" else "SPEAKER"
+
+        /** Notification label for the route switch. */
+        fun routeSwitchLabel(route: String): String =
+            if (otherRoute(route) == "SPEAKER") "Switch to speaker" else "Switch to earpiece"
         const val ACTION_NOTIF_DISMISSED = "com.pcl.app.NOTIF_DISMISSED"
         const val ACTION_NOTIF_ACTION = "com.pcl.app.NOTIF_ACTION"
         /** Remote: "Call back" on a missed-call notification. */
@@ -545,7 +552,7 @@ class LinkService : Service() {
                 sendAudioRequest("AUDIO_STEP", delta.toString())
             }
             ACTION_AUDIO_SPEAKER -> if (running && role == ROLE_REMOTE && connected) {
-                val target = if (gatewayAudioRoute == "SPEAKER") "EARPIECE" else "SPEAKER"
+                val target = otherRoute(gatewayAudioRoute)
                 Hub.log("Remote audio route: $target")
                 requestGatewayRoute(target)
             }
@@ -1172,7 +1179,10 @@ class LinkService : Service() {
             "AUDIO_STATUS" -> {
                 gatewayVolume = (arg1.toIntOrNull() ?: 0).coerceAtLeast(0)
                 gatewayMaxVolume = (p.getOrNull(2)?.toIntOrNull() ?: 1).coerceAtLeast(1)
+                val previousRoute = gatewayAudioRoute
                 gatewayAudioRoute = p.getOrNull(3).orEmpty().takeIf { it in setOf("SPEAKER", "EARPIECE", "BLUETOOTH", "WIRED_HEADSET") } ?: "UNKNOWN"
+                // The call notification's switch names the other output: refresh it.
+                if (previousRoute != gatewayAudioRoute) refreshCallNotificationsForRoute()
             }
             "WHATSAPP_CHAT" -> {
                 val ok = gatewayWhatsAppChat(arg1)
@@ -1743,6 +1753,11 @@ class LinkService : Service() {
         updateStatus()
     }
 
+    /** Remote: re-posts the SIM call notification so its route switch names the other output. */
+    private fun refreshCallNotificationsForRoute() {
+        if (role == ROLE_REMOTE && callState == CALL_OFFHOOK && simCallHere) showOngoingCall()
+    }
+
     private fun showOngoingCall() {
         // Reuse the incoming-call notification ID so the Remote has one call notification,
         // updated in place when the Gateway call is answered or connects.
@@ -1758,7 +1773,7 @@ class LinkService : Service() {
             .setContentIntent(openCallsPi())
             .addAction(action(android.R.drawable.ic_media_previous, "Volume −", actionPi(ACTION_AUDIO_DOWN, 31)))
             .addAction(action(android.R.drawable.ic_media_next, "Volume +", actionPi(ACTION_AUDIO_UP, 32)))
-            .addAction(action(android.R.drawable.ic_lock_silent_mode_off, "Speaker / Earpiece", actionPi(ACTION_AUDIO_SPEAKER, 33)))
+            .addAction(action(android.R.drawable.ic_lock_silent_mode_off, routeSwitchLabel(gatewayAudioRoute), actionPi(ACTION_AUDIO_SPEAKER, 33)))
             .addAction(action(android.R.drawable.ic_menu_close_clear_cancel, "End call", actionPi(ACTION_HANGUP, 13)))
             .build()
         try {
@@ -1976,7 +1991,7 @@ class LinkService : Service() {
         if (!ringing && connected) {
             builder.addAction(action(android.R.drawable.ic_media_previous, "Volume −", actionPi(ACTION_AUDIO_DOWN, 31)))
             builder.addAction(action(android.R.drawable.ic_media_next, "Volume +", actionPi(ACTION_AUDIO_UP, 32)))
-            builder.addAction(action(android.R.drawable.ic_lock_silent_mode_off, "Speaker / Earpiece", actionPi(ACTION_AUDIO_SPEAKER, 33)))
+            builder.addAction(action(android.R.drawable.ic_lock_silent_mode_off, routeSwitchLabel(gatewayAudioRoute), actionPi(ACTION_AUDIO_SPEAKER, 33)))
         }
         try { nm.notify(TAG_MIRROR, id, builder.build()) } catch (_: Exception) { }
 

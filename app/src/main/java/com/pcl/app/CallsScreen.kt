@@ -253,12 +253,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     valueRange = 0f..ui.gatewayMaxVolume.coerceAtLeast(1).toFloat(),
                     steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0))
                 Text("SIM audio output: " + ui.gatewayAudioRoute)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { actions.setGatewayRoute("EARPIECE") },
-                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Earpiece") }
-                    OutlinedButton(onClick = { actions.setGatewayRoute("SPEAKER") },
-                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Speaker") }
-                }
+                RouteSwitchButton(ui.gatewayAudioRoute, ui.callState == LinkService.CALL_OFFHOOK, actions::setGatewayRoute)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 if (ringing) {
@@ -375,10 +370,7 @@ private fun AppCallCard(call: LinkService.MirrorCall, ui: CallsUi, actions: Call
             )
             if (call.pkg.startsWith("com.whatsapp") && !call.ringing && ui.connected) {
                 Text("Experimental audio route · " + ui.gatewayAudioRoute)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { actions.setGatewayRoute("EARPIECE") }) { Text("Earpiece") }
-                    OutlinedButton(onClick = { actions.setGatewayRoute("SPEAKER") }) { Text("Speaker") }
-                }
+                RouteSwitchButton(ui.gatewayAudioRoute, true, actions::setGatewayRoute)
                 Text("WhatsApp may override the selected route.",
                     style = MaterialTheme.typography.bodySmall)
             }
@@ -933,4 +925,13 @@ private fun dayLabel(at: Long): String {
     today.add(Calendar.DAY_OF_YEAR, -1)
     if (same(day, today)) return "Yesterday"
     return DateFormat.getDateInstance(DateFormat.MEDIUM).format(Date(at))
+}
+
+/** One button that switches the Gateway's call audio to the other output: speaker <-> earpiece. */
+@Composable
+private fun RouteSwitchButton(route: String, enabled: Boolean, onSwitch: (String) -> Unit) {
+    val target = LinkService.otherRoute(route)
+    OutlinedButton(onClick = { onSwitch(target) }, enabled = enabled) {
+        Text(if (target == "SPEAKER") "Switch to speaker" else "Switch to earpiece")
+    }
 }
