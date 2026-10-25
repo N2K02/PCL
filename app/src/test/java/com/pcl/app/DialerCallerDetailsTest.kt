@@ -54,6 +54,13 @@ class DialerCallerDetailsTest {
         assertEquals("Alice", caller(person = "Unknown", people = "Alice", text = "55551234").name)
     }
 
+    @Test fun inspectsCallPersonUriEvenWhenNotificationHasNoVisibleText() {
+        assertEquals(true, DialerCallerDetails.shouldInspectNotification("", "", true))
+        assertEquals(false, DialerCallerDetails.shouldInspectNotification("", "", false))
+        assertEquals(true, DialerCallerDetails.shouldInspectNotification("Incoming", "", false))
+        assertEquals("+230 5555 1234", caller(uri = "tel:+230 5555 1234").number)
+    }
+
     @Test fun respectsCallNotificationAgeBoundary() {
         assertEquals(true, DialerCallerDetails.belongsToCurrentCall(5_000L, 10_000L))
         assertEquals(false, DialerCallerDetails.belongsToCurrentCall(4_999L, 10_000L))

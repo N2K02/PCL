@@ -9,6 +9,10 @@ internal object DialerCallerDetails {
 
     private val phonePattern = Regex("""^[+]?[0-9(][0-9() .-]{3,28}[0-9]$""")
 
+    /** Some OEM call notifications contain only a telephone Person URI. */
+    fun shouldInspectNotification(title: String, text: String, isDefaultDialerCall: Boolean): Boolean =
+        title.isNotEmpty() || text.isNotEmpty() || isDefaultDialerCall
+
     /** Avoid reviving a previous call's notification after a new call starts. */
     fun belongsToCurrentCall(postedAtMs: Long, startedAtMs: Long): Boolean =
         startedAtMs <= 0 || postedAtMs >= startedAtMs - 5_000L

@@ -231,7 +231,11 @@ class NotifListener : NotificationListenerService() {
             }
             svc.mirrorRemoved(sbn.key)
         }
-        if (title.isEmpty() && text.isEmpty()) return
+        // A call-style notification can expose the number only as Person.uri.
+        // Don't discard it just because the visible title and text are empty.
+        if (!DialerCallerDetails.shouldInspectNotification(
+                title, text, callNotification && sbn.packageName == defaultDialer()
+            )) return
 
         if (callNotification) {
             synchronized(actionsByKey) {
@@ -367,7 +371,7 @@ class NotifListener : NotificationListenerService() {
             personUri = person?.uri.orEmpty(),
             personName = person?.name?.toString().orEmpty(),
             compatName = compatCallerName(ex),
-            peopleName = callerName(ex),
+            peopleName = peopleCallerName(ex),
             title = title,
             text = text,
         )
@@ -412,6 +416,11 @@ class NotifListener : NotificationListenerService() {
     private fun callerName(ex: Bundle): String {
         callerPerson(ex)?.name?.toString()?.takeIf { it.isNotBlank() }?.let { return it }
         compatCallerName(ex).takeIf { it.isNotBlank() }?.let { return it }
+        return peopleCallerName(ex)
+    }
+
+    /** Read the people list independently: a generic CallStyle Person must not hide it. */
+    private fun peopleCallerName(ex: Bundle): String {
         val people = try {
             if (Build.VERSION.SDK_INT >= 33)
                 ex.getParcelableArrayList(Notification.EXTRA_PEOPLE_LIST, android.app.Person::class.java)
