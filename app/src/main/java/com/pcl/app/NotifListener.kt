@@ -242,27 +242,14 @@ class NotifListener : NotificationListenerService() {
             if (sbn.packageName == defaultDialer()) {
                 if (svc.simCallStartedAt() > 0L && sbn.postTime + 5000L < svc.simCallStartedAt()) return
                 synchronized(dialerCallKeys) { dialerCallKeys.add(sbn.key) }
-                val person = callerPerson(ex)
-                val uriNumber = person?.uri?.takeIf { it.startsWith("tel:", ignoreCase = true) }
-                    ?.removePrefix("tel:").orEmpty()
-                // Dialers may put the raw number in the Person name, compat Person,
-                // title or text instead of the Person URI. Do not treat a number as
-                // a contact name, and never forward generic dialer placeholders.
-                val numberPattern = Regex("^\\+?[0-9][0-9() .-]{3,28}[0-9]$")
-                fun phoneNumber(value: String): String =
-                    value.trim().takeIf { numberPattern.matches(it) &&
-                        it.count(Char::isDigit) >= 5 }.orEmpty()
-                val candidate = listOf(uriNumber, person?.name?.toString().orEmpty(),
-                    compatCallerName(ex), title, text)
-                    .firstNotNullOfOrNull { phoneNumber(it).takeIf(String::isNotEmpty) }.orEmpty()
-                val personName = person?.name?.toString().orEmpty()
-                val candidateName = listOf(personName, compatCallerName(ex), title)
-                    .map(String::trim)
-                    .firstOrNull { it.isNotEmpty() && phoneNumber(it).isEmpty() &&
-                        it !in listOf("Incoming call", "Ongoing call", "Phone",
-                            "Unknown", "Unknown number", "Private number", "No caller ID") }
-                    .orEmpty()
-                svc.updateCallerFromNotification(candidate, candidateName)
+                val caller = dialerCaller(sbn)
+                // Some dialers post their notification before the phone-state receiver runs.
+                // The state transition rechecks active notifications instead of losing the number.
+                if (svc.callState == LinkService.CALL_IDLE && metadataChanged &&
+                    (caller.number.isNotEmpty() || caller.name.isNotEmpty())) {
+                    Hub.log("Phone caller details arrived before call state; rechecking when the call starts")
+                }
+                svc.updateCallerFromNotification(caller.number, caller.name)
                 return
             }
             val previousSessionState = synchronized(thirdPartySessions) {
@@ -323,6 +310,63 @@ class NotifListener : NotificationListenerService() {
         } catch (e: Exception) {
             Hub.log("Could not sync active notifications: ${e.message}")
         }
+    }
+
+    /**
+     * Recheck only the active Phone notifications after Android reports a SIM call.
+     * The notification can arrive first, when LinkService must ignore idle-call updates.
+     * Prefer the most recent matching notification, never an unrelated app.
+     */
+    fun refreshActiveSimCaller() {
+        val svc = Hub.service ?: return
+        if (svc.role != LinkService.ROLE_GATEWAY || svc.callState == LinkService.CALL_IDLE) return
+        val dialer = defaultDialer() ?: return
+        val active = try {
+            activeNotifications
+        } catch (e: Exception) {
+            Hub.log("Cannot recheck Phone caller notification: ${e.javaClass.simpleName}")
+            null
+        } ?: return
+        val startedAt = svc.simCallStartedAt()
+        var found = false
+        active.asSequence()
+            .filter { it.packageName == dialer }
+            .filter { sbn ->
+                val n = sbn.notification
+                n.category == Notification.CATEGORY_CALL || isCallStyle(n) ||
+                    (sbn.isOngoing && relaysOf(n).any { relay ->
+                        WhatsAppCalls.containsAny(relay.label, GENERIC_CALL_ACTIONS)
+                    })
+            }
+            .filter { startedAt <= 0L || it.postTime + 5000L >= startedAt }
+            .sortedByDescending { it.postTime }
+            .forEach { sbn ->
+                val caller = dialerCaller(sbn)
+                if (caller.number.isNotEmpty() || caller.name.isNotEmpty()) {
+                    found = true
+                    svc.updateCallerFromNotification(caller.number, caller.name)
+                }
+            }
+        if (!found) Hub.log("No caller identifiers in active Phone notifications")
+    }
+
+    /** Extract the original title, not the display title overwritten by Person metadata. */
+    private fun dialerCaller(sbn: StatusBarNotification): DialerCallerDetails.Identity {
+        val ex = sbn.notification.extras ?: return DialerCallerDetails.Identity("", "")
+        val person = callerPerson(ex)
+        val title = (ex.getCharSequence(Notification.EXTRA_TITLE)
+            ?: ex.getCharSequence(Notification.EXTRA_TITLE_BIG))?.toString().orEmpty()
+        val text = (ex.getCharSequence(Notification.EXTRA_BIG_TEXT)
+            ?: ex.getCharSequence(Notification.EXTRA_TEXT))?.toString()
+            ?: ex.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.joinToString("\n").orEmpty()
+        return DialerCallerDetails.fromNotification(
+            personUri = person?.uri.orEmpty(),
+            personName = person?.name?.toString().orEmpty(),
+            compatName = compatCallerName(ex),
+            peopleName = callerName(ex),
+            title = title,
+            text = text,
+        )
     }
 
     fun notificationPackage(key: String): String? =

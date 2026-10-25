@@ -1256,6 +1256,9 @@ class LinkService : Service() {
             if (newState == CALL_IDLE) {
                 callNumber = ""
                 callName = ""
+            } else if (changed) {
+                // Call-style notifications may arrive ahead of the state broadcast.
+                NotifListener.instance?.refreshActiveSimCaller()
             }
             Hub.notifyUi()
         }
@@ -1294,6 +1297,7 @@ class LinkService : Service() {
                 if (current == CALL_IDLE) { callNumber = ""; callName = "" }
                 Hub.log("Initial phone state: $current (details may be unavailable)")
                 sendCallState()
+                if (current != CALL_IDLE) NotifListener.instance?.refreshActiveSimCaller()
             }
         } catch (e: Exception) {
             Hub.log("Initial phone-state query unavailable: ${e.message ?: e.javaClass.simpleName}")
