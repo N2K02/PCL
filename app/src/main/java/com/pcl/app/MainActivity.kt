@@ -336,8 +336,11 @@ class MainActivity : ComponentActivity() {
                 )
             } else Column(
                 Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState())
-                    .padding(horizontal = 18.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                    .padding(
+                        horizontal = if (screen == MainTab.SETTINGS && !showingPermissions) 12.dp else 18.dp,
+                        vertical = if (screen == MainTab.SETTINGS && !showingPermissions) 8.dp else 12.dp,
+                    ),
+                verticalArrangement = Arrangement.spacedBy(if (screen == MainTab.SETTINGS && !showingPermissions) 4.dp else 14.dp)
             ) {
                 if (screen == MainTab.HOME && setupReady) {
                     SectionCard(
@@ -470,6 +473,12 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (screen == MainTab.SETTINGS && !showingPermissions) {
+                    Text(
+                        "Manage your connection",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 16.dp, top = 6.dp, bottom = 12.dp),
+                    )
                     ListItem(
                         headlineContent = { Text("Permissions") },
                         supportingContent = { Text("Device role, required access, notification sync and setup") },
@@ -485,6 +494,7 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.clickable { if (setupReady) screen = MainTab.CALLS },
                         )
                     }
+                    HorizontalDivider()
                     ListItem(
                         headlineContent = { Text("About & updates") },
                         supportingContent = { Text(if (updateStatus.hasPendingUpdate()) "A new update is available" else "App version and update checks") },
