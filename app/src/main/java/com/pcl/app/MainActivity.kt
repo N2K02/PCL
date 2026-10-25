@@ -255,16 +255,35 @@ class MainActivity : ComponentActivity() {
             topBar = {
                 TopAppBar(
                     title = {
-                        Column {
-                            Text("PCL", fontWeight = FontWeight.Bold)
-                            Text("Bluetooth Call Relay", style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Icon(
+                                when (screen) {
+                                    MainTab.HOME -> Icons.Default.Hub
+                                    MainTab.CALLS -> Icons.Default.Call
+                                    MainTab.UPDATE -> Icons.Default.Download
+                                    MainTab.SETTINGS -> Icons.Default.Settings
+                                },
+                                contentDescription = null, tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp),
+                            )
+                            Text(when (screen) {
+                                MainTab.HOME -> "Home"
+                                MainTab.CALLS -> "Calls"
+                                MainTab.UPDATE -> "About & updates"
+                                MainTab.SETTINGS -> "Settings"
+                            }, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
                         }
                     },
                     actions = {
-                        FilledTonalIconButton(onClick = { quitApp() }, modifier = Modifier.padding(end = 8.dp)) {
+                        FilledTonalIconButton(onClick = { quitApp() }) {
                             Icon(Icons.Default.PowerSettingsNew, contentDescription = "Quit")
                         }
+                        dev.n2k02.updater.N2K02AppIcon(Modifier.size(28.dp))
+                        Text("PCL", fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.padding(start = 6.dp, end = 12.dp))
                     },
                     
                 )
