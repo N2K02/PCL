@@ -22,4 +22,12 @@ class AudioRouteTest {
         for (label in listOf("Hang up", "Mute", "Answer", "Hold"))
             assertFalse(label, WhatsAppCalls.isSpeaker(label))
     }
+
+    @Test fun remoteExplainsFailedAudioRequests() {
+        assertEquals(null, LinkService.audioOutcomeNote("VOLUME", "APPLIED"))
+        assertEquals(null, LinkService.audioOutcomeNote("ROUTE", "APPLIED"))
+        assertTrue(LinkService.audioOutcomeNote("ROUTE", "NOT_APPLIED")!!.contains("Accessibility"))
+        assertTrue(LinkService.audioOutcomeNote("VOLUME", "NOT_APPLIED")!!.contains("volume"))
+        assertEquals("No call on the Gateway to switch", LinkService.audioOutcomeNote("ROUTE", "NO_CALL"))
+    }
 }

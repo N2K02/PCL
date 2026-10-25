@@ -64,9 +64,10 @@ class WhatsappCallAccessibilityService : AccessibilityService() {
         speakerHandler.post {
             speakerWasOn = currentlySpeaker
             speakerRequest = route
-            speakerDeadline = SystemClock.elapsedRealtime() + 3_000L
+            // Long enough for the in-call screen PCL just opened to appear.
+            speakerDeadline = SystemClock.elapsedRealtime() + 6_000L
             speakerHandler.removeCallbacks(expireSpeakerRequest)
-            speakerHandler.postDelayed(expireSpeakerRequest, 3_000L)
+            speakerHandler.postDelayed(expireSpeakerRequest, 6_000L)
             refreshEventFilter()
             val root = try { rootInActiveWindow } catch (_: Exception) { null }
             if (root != null) trySpeakerRoute(root)

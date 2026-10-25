@@ -114,6 +114,8 @@ class CallsUi(
     val gatewayVolume: Int,
     val gatewayMaxVolume: Int,
     val gatewayAudioRoute: String,
+    /** What the Gateway said about the last volume or speaker request; null when it worked. */
+    val gatewayAudioNote: String? = null,
 )
 
 class CallsActions(
@@ -230,7 +232,8 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     Text(
                         when {
                             ringing -> "Incoming SIM call"
-                            ui.simOnGateway -> "Taken on the Gateway"
+                            ui.simOnGateway && since > 0 -> "Answered on the Gateway phone · ${duration((now - since) / 1000)}"
+                            ui.simOnGateway -> "Answered on the Gateway phone"
                             since > 0 -> "On a call · ${duration((now - since) / 1000)}"
                             else -> "Calling…"
                         },
@@ -254,6 +257,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0))
                 Text("SIM audio output: " + ui.gatewayAudioRoute)
                 RouteSwitchButton(ui.gatewayAudioRoute, ui.callState == LinkService.CALL_OFFHOOK, { actions.setGatewayRoute(it) })
+                ui.gatewayAudioNote?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 if (ringing) {

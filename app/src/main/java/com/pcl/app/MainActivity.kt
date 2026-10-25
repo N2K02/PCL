@@ -68,6 +68,15 @@ class MainActivity : ComponentActivity() {
     private var roleSelected by mutableStateOf(false)
     private var devices by mutableStateOf<List<Pair<String, String>>>(emptyList())
     private var selectedDevice by mutableStateOf<String?>(null)
+    /** Gateway: every Remote allowed to connect; several can be connected at once. */
+    private var selectedRemotes by mutableStateOf<Set<String>>(emptySet())
+
+    private fun isSelected(address: String): Boolean =
+        if (role == LinkService.ROLE_GATEWAY) address in selectedRemotes else address == selectedDevice
+
+    private fun savedRemotes(): Set<String> =
+        prefs.getStringSet(Prefs.PEER_DEVICES, null)?.toSet()
+            ?: setOfNotNull(prefs.getString(Prefs.PEER_DEVICE, null))
     private var contacts by mutableStateOf<List<Contact>>(emptyList())
     private var loadedContactsVersion = -1
     /** A tab asked for by a notification (the missed-call one opens Calls). */
@@ -88,6 +97,7 @@ class MainActivity : ComponentActivity() {
         roleSelected = true
         if (!prefs.contains(Prefs.ROLE)) prefs.edit().putString(Prefs.ROLE, LinkService.ROLE_GATEWAY).apply()
         selectedDevice = prefs.getString(Prefs.PEER_DEVICE, null)
+        selectedRemotes = savedRemotes()
         CallLogger.init(this)
         CallHistory.init(this)
         Favourites.init(this)
@@ -203,8 +213,24 @@ class MainActivity : ComponentActivity() {
             requestMissingPermissions()
             return
         }
-        // Both roles need the other phone: the Remote connects to it, and the Gateway
-        // accepts only it.
+        // The Gateway accepts only the Remotes selected on Home (one or more).
+        if (chosenRole == LinkService.ROLE_GATEWAY) {
+            val remotes = selectedRemotes.filter { a -> devices.any { it.second == a } }
+            if (remotes.isEmpty()) {
+                toast("Select one or more paired Remote phones on Home first")
+                return
+            }
+            prefs.edit().putString(Prefs.ROLE, chosenRole)
+                .putStringSet(Prefs.PEER_DEVICES, remotes.toSet())
+                .putString(Prefs.PEER_DEVICE, remotes.first()).apply()
+            startForegroundService(Intent(this, LinkService::class.java)
+                .setAction(LinkService.ACTION_START)
+                .putExtra(LinkService.EXTRA_ROLE, chosenRole)
+                .putExtra(LinkService.EXTRA_DEVICE, remotes.first()))
+            refresh()
+            return
+        }
+        // The Remote connects to the one Gateway selected on Home.
         val addr = selectedDevice
         if (addr == null || devices.none { it.second == addr }) {
             toast(
@@ -246,6 +272,7 @@ class MainActivity : ComponentActivity() {
         // Never pick a device automatically: on a Gateway the choice decides which phone may connect.
         val saved = prefs.getString(Prefs.PEER_DEVICE, null)
         selectedDevice = saved?.takeIf { address -> devices.any { it.second == address } }
+        selectedRemotes = savedRemotes().filter { address -> devices.any { it.second == address } }.toSet()
         revision++
     }
 
@@ -368,6 +395,7 @@ class MainActivity : ComponentActivity() {
                         gatewayVolume = service?.gatewayVolume ?: 0,
                         gatewayMaxVolume = service?.gatewayMaxVolume ?: 1,
                         gatewayAudioRoute = service?.gatewayAudioRoute ?: "UNKNOWN",
+                        gatewayAudioNote = service?.gatewayAudioNote,
                     ),
                     actions = CallsActions(
                         simCall = { number, name -> service?.dial(number, name) },
@@ -395,7 +423,7 @@ class MainActivity : ComponentActivity() {
                     SectionCard(
                         title = if (remote) "Gateway phone" else "Remote phone",
                         subtitle = if (remote) "Select the paired Gateway phone to connect to."
-                            else "Select the paired Remote phone. Only this phone can connect to this Gateway."
+                            else "Tap each paired Remote phone that may connect. Several can be connected at once."
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Text("${devices.size} paired", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
@@ -418,13 +446,20 @@ class MainActivity : ComponentActivity() {
                                 Card(
                                     onClick = {
                                         if (!running) {
-                                            selectedDevice = device.second
-                                            prefs.edit().putString(Prefs.PEER_DEVICE, device.second).apply()
+                                            if (role == LinkService.ROLE_GATEWAY) {
+                                                // A Gateway can serve several Remotes: tap to add or remove.
+                                                selectedRemotes = if (device.second in selectedRemotes) selectedRemotes - device.second
+                                                    else selectedRemotes + device.second
+                                                prefs.edit().putStringSet(Prefs.PEER_DEVICES, selectedRemotes).apply()
+                                            } else {
+                                                selectedDevice = device.second
+                                                prefs.edit().putString(Prefs.PEER_DEVICE, device.second).apply()
+                                            }
                                             refresh()
                                         }
                                     },
                                     colors = CardDefaults.cardColors(
-                                        containerColor = if (device.second == selectedDevice)
+                                        containerColor = if (isSelected(device.second))
                                             MaterialTheme.colorScheme.secondaryContainer
                                         else MaterialTheme.colorScheme.surfaceContainerLow
                                     )
@@ -446,7 +481,7 @@ class MainActivity : ComponentActivity() {
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                         }
-                                        if (device.second == selectedDevice) {
+                                        if (isSelected(device.second)) {
                                             Icon(Icons.Default.CheckCircle, null, tint = MaterialTheme.colorScheme.primary)
                                         }
                                     }
@@ -488,9 +523,12 @@ class MainActivity : ComponentActivity() {
                             }
                         }
                         Text(
-                            devices.firstOrNull { it.second == selectedDevice }?.let { peer ->
-                                if (remote) "Gateway: ${peer.first}" else "Gateway · SIM calls use this phone · Remote: ${peer.first}"
-                            } ?: if (remote) "Select the paired Gateway above." else "Select the paired Remote above.",
+                            if (remote) devices.firstOrNull { it.second == selectedDevice }?.let { "Gateway: ${it.first}" } ?: "Select the paired Gateway above."
+                            else devices.filter { it.second in selectedRemotes }.map { it.first }.takeIf { it.isNotEmpty() }?.let { names ->
+                                val online = service?.connectedRemoteNames.orEmpty()
+                                "Gateway · SIM calls use this phone · Remotes: ${names.joinToString(", ")}" +
+                                    if (online.isNotEmpty()) " · connected: ${online.joinToString(", ")}" else ""
+                            } ?: "Select the paired Remote phones above.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -580,7 +618,7 @@ class MainActivity : ComponentActivity() {
                             Text(service?.display().orEmpty(), style = MaterialTheme.typography.bodyLarge)
                         }
                         if (remote && service?.simCallOnGateway == true) {
-                            Text("Taken on the Gateway, so this phone stays quiet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text("Answered on the Gateway phone. You can still control it here.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         val callError = service?.callControlError
                         if (callError?.startsWith("FAILED:") == true || callError?.startsWith("PENDING:") == true) {

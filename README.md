@@ -42,7 +42,7 @@ The Bluetooth link carries call state, notifications, contacts and commands. It 
    - **Call log** (strongly recommended): since Android 9, Android only gives an app the caller's number with this permission. Without it the Remote often shows no number, and can't tell a private number apart.
 5. **On the Remote**, choose **Remote** and grant Nearby devices and Notifications. Contacts is optional (adds this phone's contacts to search). The Remote needs no Notification access.
 6. **Optional, Gateway only:** in Android **Accessibility** settings, enable **PCL WhatsApp call helper**, so the Gateway can start WhatsApp calls you ask for from the Remote (see [WhatsApp calls](#whatsapp-calls)). The Remote doesn't need it.
-7. On **Home**, each phone selects the other one from its paired devices, then press **Start** on both. The Gateway only accepts connections from the Remote you selected.
+7. On **Home**, the Remote selects the Gateway, and the Gateway taps every Remote that may connect (several can be connected at once). Press **Start** on each. The Gateway only accepts connections from the Remotes you selected; every Remote rings, shows the live call and can control it.
 8. Let PCL run in the background. On Xiaomi/Redmi/POCO, Huawei/Honor, OPPO/realme/OnePlus, vivo and some Samsung builds, set PCL's battery usage to **Unrestricted**, allow auto-start if offered, and lock it in Recents. Menu names vary.
 
 While the link is on, PCL tries to restart by itself after the phone reboots, after an update, or if Android stops it. **Stop** or **Quit** turns that off until you press Start again.

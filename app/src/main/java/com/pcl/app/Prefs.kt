@@ -18,6 +18,9 @@ object Prefs {
     /** The other phone: the Gateway on a Remote, and the only allowed Remote on a Gateway. */
     const val PEER_DEVICE = "device"
 
+    /** Gateway: every Remote allowed to connect (several can be connected at once). */
+    const val PEER_DEVICES = "devices"
+
     /** Gateway: mirror notifications to the Remote. */
     const val MIRROR = "mirror"
 

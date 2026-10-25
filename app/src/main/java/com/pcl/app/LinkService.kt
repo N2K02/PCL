@@ -67,6 +67,21 @@ class LinkService : Service() {
         const val ACTION_AUDIO_UP = "com.pcl.app.AUDIO_UP"
         const val ACTION_AUDIO_SPEAKER = "com.pcl.app.AUDIO_SPEAKER"
 
+        /** What the Remote shows for a Gateway audio result, or null when it worked. Pure, for tests. */
+        fun audioOutcomeNote(kind: String, outcome: String): String? {
+            val what = if (kind == "ROUTE") "speaker/earpiece switch" else "volume change"
+            return when (outcome) {
+                "APPLIED" -> null
+                "FALLBACK_QUEUED" -> "Switching through the Gateway's Phone app…"
+                "NO_CALL" -> "No call on the Gateway to switch"
+                "NOT_APPLIED" -> if (kind == "ROUTE")
+                    "The Gateway's Phone app kept its output. Turn on \"PCL WhatsApp call helper\" in the Gateway's Accessibility settings."
+                else "The Gateway's Android didn't apply the $what."
+                "ERROR" -> "The Gateway hit an error with the $what"
+                else -> null
+            }
+        }
+
         /** The output the route switch goes to: earpiece from the speaker, else the speaker. */
         fun otherRoute(route: String): String = if (route == "SPEAKER") "EARPIECE" else "SPEAKER"
 
@@ -152,6 +167,10 @@ class LinkService : Service() {
     @Volatile var gatewayAudioRoute = "UNKNOWN"
         private set
 
+    /** Remote: what the Gateway said about the last volume or speaker request, shown on the Calls screen. */
+    @Volatile var gatewayAudioNote: String? = null
+        private set
+
     private val audioRequestSequence = AtomicLong()
     private val pendingAudioRequests = ConcurrentHashMap<String, Runnable>()
     private val audioTimeoutHandler = Handler(Looper.getMainLooper())
@@ -218,11 +237,18 @@ class LinkService : Service() {
                 if (target != before) runCatching { audio.setStreamVolume(stream, target, 0) }
                 after = audio.getStreamVolume(stream)
             }
+            if (after == before) {
+                // Last way: the "suggested stream" path the volume keys use.
+                runCatching {
+                    audio.adjustSuggestedStreamVolume(if (delta > 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, stream, 0)
+                }
+                after = audio.getStreamVolume(stream)
+            }
             Hub.log("Gateway audio step: stream=$stream, mode=${audio.mode}, $before -> $after")
-            send("AUDIO_RESULT", "STEP", if (after != before) "APPLIED" else "NOT_APPLIED", requestId)
+            replyToSender("AUDIO_RESULT", "STEP", if (after != before) "APPLIED" else "NOT_APPLIED", requestId)
         } catch (e: Exception) {
             Hub.log("Gateway audio step failed: ${e.message ?: e.javaClass.simpleName}")
-            send("AUDIO_RESULT", "STEP", "ERROR", requestId)
+            replyToSender("AUDIO_RESULT", "STEP", "ERROR", requestId)
         } finally { gatewayAudioStatus() }
     }
 
@@ -251,7 +277,7 @@ class LinkService : Service() {
             val actual = gatewayRoute(audio)
             val outcome = if (actual == route) "APPLIED" else "NOT_APPLIED"
             Hub.log("Gateway delayed route verification: requested=$route actual=$actual result=$outcome")
-            send("AUDIO_RESULT", "ROUTE_VERIFY", outcome, requestId)
+            replyToSender("AUDIO_RESULT", "ROUTE_VERIFY", outcome, requestId)
             gatewayAudioStatus()
         }, 900L)
     }
@@ -271,12 +297,25 @@ class LinkService : Service() {
             val before = audio.getStreamVolume(stream)
             val target = level.coerceIn(0, audio.getStreamMaxVolume(stream))
             audio.setStreamVolume(stream, target, 0)
-            val actual = audio.getStreamVolume(stream)
+            var actual = audio.getStreamVolume(stream)
+            // Some phones ignore a direct set from a background app: step towards the target instead.
+            var guard = 20
+            while (actual != target && guard-- > 0) {
+                val direction = if (target > actual) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
+                runCatching { audio.adjustStreamVolume(stream, direction, 0) }
+                var now = audio.getStreamVolume(stream)
+                if (now == actual) {
+                    runCatching { audio.adjustSuggestedStreamVolume(direction, stream, 0) }
+                    now = audio.getStreamVolume(stream)
+                }
+                if (now == actual) break
+                actual = now
+            }
             Hub.log("Gateway volume: stream=$stream, mode=${audio.mode}, $before -> $actual / ${audio.getStreamMaxVolume(stream)}")
-            send("AUDIO_RESULT", "VOLUME", if (actual == target) "APPLIED" else "NOT_APPLIED", requestId)
+            replyToSender("AUDIO_RESULT", "VOLUME", if (actual == target) "APPLIED" else "NOT_APPLIED", requestId)
         } catch (e: Exception) {
             Hub.log("Gateway volume failed: ${e.javaClass.simpleName}")
-            send("AUDIO_RESULT", "VOLUME", "ERROR", requestId)
+            replyToSender("AUDIO_RESULT", "VOLUME", "ERROR", requestId)
         } finally {
             gatewayAudioStatus()
         }
@@ -284,7 +323,7 @@ class LinkService : Service() {
 
     private fun gatewaySetAudioRoute(route: String, requestId: String = "", allowDialerAction: Boolean = true) {
         if (route !in setOf("SPEAKER", "EARPIECE")) {
-            send("AUDIO_RESULT", "ROUTE", "INVALID", requestId)
+            replyToSender("AUDIO_RESULT", "ROUTE", "INVALID", requestId)
             return
         }
         val audio = getSystemService(AudioManager::class.java) ?: return
@@ -294,14 +333,14 @@ class LinkService : Service() {
             audio.mode == AudioManager.MODE_IN_COMMUNICATION
         if (!active) {
             Hub.log("Gateway audio route not applied: no active communication")
-            send("AUDIO_RESULT", "ROUTE", "NO_CALL", requestId)
+            replyToSender("AUDIO_RESULT", "ROUTE", "NO_CALL", requestId)
             gatewayAudioStatus()
             return
         }
         val current = gatewayRoute(audio)
         if (current == route) {
             Hub.log("Gateway audio route already $route")
-            send("AUDIO_RESULT", "ROUTE", "APPLIED", requestId)
+            replyToSender("AUDIO_RESULT", "ROUTE", "APPLIED", requestId)
             gatewayAudioStatus()
             return
         }
@@ -310,7 +349,7 @@ class LinkService : Service() {
         if (allowDialerAction && callState != CALL_IDLE && current in setOf("SPEAKER", "EARPIECE") &&
             NotifListener.instance?.performCallAction("speaker") == true) {
             Hub.log("Gateway audio route: pressed the Phone app's Speaker button for $route")
-            send("AUDIO_RESULT", "ROUTE", "FALLBACK_QUEUED", requestId)
+            replyToSender("AUDIO_RESULT", "ROUTE", "FALLBACK_QUEUED", requestId)
             // If the button didn't move the audio, try the other ways.
             audioTimeoutHandler.postDelayed({
                 if (!running || role != ROLE_GATEWAY) return@postDelayed
@@ -336,6 +375,11 @@ class LinkService : Service() {
             val fallback = if ((!accepted || actual != route) && callState != CALL_IDLE) {
                 val helper = WhatsappCallAccessibilityService.instance
                 if (helper == null) Hub.log("Speaker fallback unavailable: turn on PCL's accessibility helper on the Gateway")
+                else {
+                    // Bring the Phone app's in-call screen up so the helper can press its Speaker button.
+                    runCatching { getSystemService(TelecomManager::class.java)?.showInCallScreen(false) }
+                        .onFailure { Hub.log("Could not open the in-call screen: ${it.message ?: it.javaClass.simpleName}") }
+                }
                 helper?.requestSpeakerRoute(route, when (current) { "SPEAKER" -> true; "EARPIECE" -> false; else -> null }) == true
             } else false
             val verifiedRoute = gatewayRoute(audio)
@@ -345,11 +389,11 @@ class LinkService : Service() {
                 else -> "NOT_APPLIED"
             }
             Hub.log("Gateway audio route: requested=$route, actual=$verifiedRoute, outcome=$outcome")
-            send("AUDIO_RESULT", "ROUTE", outcome, requestId)
+            replyToSender("AUDIO_RESULT", "ROUTE", outcome, requestId)
             if (fallback) verifyGatewayRouteLater(route, requestId)
         } catch (e: Exception) {
             Hub.log("Gateway audio route failed: ${e.javaClass.simpleName}")
-            send("AUDIO_RESULT", "ROUTE", "ERROR", requestId)
+            replyToSender("AUDIO_RESULT", "ROUTE", "ERROR", requestId)
         } finally {
             gatewayAudioStatus()
         }
@@ -445,6 +489,27 @@ class LinkService : Service() {
     @Volatile private var socket: BluetoothSocket? = null
     @Volatile private var serverSocket: BluetoothServerSocket? = null
     @Volatile private var writer: FrameWriter? = null
+
+    /** Gateway: one connected Remote. Several can be connected at the same time. */
+    private class Peer(val address: String, val name: String, val socket: BluetoothSocket, val writer: FrameWriter)
+
+    /** Gateway: the connected Remotes, by Bluetooth address. */
+    private val peers = ConcurrentHashMap<String, Peer>()
+
+    /** Gateway: the Remotes allowed to connect (upper-case addresses). */
+    @Volatile private var allowedRemotes: Set<String> = emptySet()
+
+    /** Gateway: while a Remote has just connected, what is sent goes only to it (state replay). */
+    private val replayTarget = ThreadLocal<Peer?>()
+
+    /** Gateway: the Remote whose command is being handled, for replies meant only for it. */
+    private val commandSender = ThreadLocal<Peer?>()
+
+    /** Gateway: commands from several Remotes are handled one at a time. */
+    private val gatewayLock = Any()
+
+    /** Names of the Remotes connected to this Gateway, for the Home screen. */
+    val connectedRemoteNames: List<String> get() = peers.values.map { it.name }.sorted()
     private var worker: Thread? = null
     private val io = Executors.newSingleThreadExecutor()
     private var receiverRegistered = false
@@ -588,6 +653,11 @@ class LinkService : Service() {
         if (running) shutdown()
         role = newRole
         deviceAddress = device
+        allowedRemotes = if (newRole == ROLE_GATEWAY) {
+            Prefs.of(this).getStringSet(Prefs.PEER_DEVICES, emptySet()).orEmpty()
+                .ifEmpty { setOfNotNull(device) }
+                .map { it.uppercase() }.toSet()
+        } else emptySet()
         running = true
         connectionState = "Starting…"
         rxTotal.set(0L); txTotal.set(0L); lastRxSample = 0L; lastTxSample = 0L
@@ -876,6 +946,7 @@ class LinkService : Service() {
         // Failed client connection attempts back off exponentially to reduce wakeups
         // and log churn when the peer is out of range or Bluetooth is unavailable.
         // A healthy session resets the delay so ordinary reconnects remain quick.
+        if (role == ROLE_GATEWAY) { gatewayLoop(gen); return }
         var retryDelayMs = 3_000L
         while (alive(gen)) {
             var s: BluetoothSocket? = null
@@ -920,6 +991,103 @@ class LinkService : Service() {
     @SuppressLint("MissingPermission")
     private fun deviceName(a: BluetoothAdapter, address: String): String =
         try { a.getRemoteDevice(address).name } catch (_: Exception) { null } ?: address
+
+    /**
+     * Gateway: accepts every selected Remote, each on its own link and thread, for as long as
+     * PCL runs. Connections from any other paired device are refused.
+     */
+    @SuppressLint("MissingPermission")
+    private fun gatewayLoop(gen: Int) {
+        while (alive(gen)) {
+            try {
+                val a = adapter()
+                if (allowedRemotes.isEmpty()) throw IOException("No Remote phone selected – choose them on the Home screen")
+                if (peers.isEmpty()) setConn(false, "Waiting for ${allowedRemotes.joinToString { deviceName(a, it) }}…")
+                val ss = a.listenUsingRfcommWithServiceRecord(Protocol.SERVICE_NAME, Protocol.SERVICE_UUID)
+                serverSocket = ss
+                try {
+                    while (alive(gen)) {
+                        val s = ss.accept()
+                        if (!alive(gen)) { runCatching { s.close() }; break }
+                        val from = s.remoteDevice.address
+                        if (from.uppercase() !in allowedRemotes) {
+                            Hub.log("Refused Bluetooth connection from ${deviceName(a, from)}: it isn't a selected Remote")
+                            runCatching { s.close() }
+                            continue
+                        }
+                        Thread({
+                            try {
+                                runGatewaySession(s, gen)
+                            } catch (e: Exception) {
+                                if (alive(gen)) Hub.log("Link with ${deviceName(a, from)}: ${e.message}")
+                            } finally {
+                                runCatching { s.close() }
+                            }
+                        }, "pcl-remote-$from").start()
+                    }
+                } finally {
+                    runCatching { ss.close() }
+                    serverSocket = null
+                }
+            } catch (e: Exception) {
+                if (alive(gen)) Hub.log("Link: ${e.message}")
+            }
+            if (!alive(gen)) break
+            try { Thread.sleep(3_000L) } catch (_: InterruptedException) { break }
+        }
+    }
+
+    /** Gateway: one Remote's link: replays the current state to it, then handles its commands. */
+    @SuppressLint("MissingPermission")
+    private fun runGatewaySession(s: BluetoothSocket, gen: Int) {
+        val address = s.remoteDevice.address
+        val name = try { s.remoteDevice.name } catch (_: Exception) { null } ?: address
+        val peer = Peer(address, name, s, FrameWriter(s.outputStream))
+        // The same Remote reconnecting replaces its old link.
+        peers.put(address.uppercase(), peer)?.let { old -> runCatching { old.socket.close() } }
+        updateGatewayConnection()
+        replayTarget.set(peer)
+        try {
+            send("HELLO", role, Protocol.VERSION.toString(), appVersion)
+            // Every WhatsApp call state, IDLE included, before the call notifications.
+            for (pkg in WhatsAppCalls.PACKAGES) sendWhatsAppState(pkg, localWhatsappCallStates[pkg] ?: WhatsAppCalls.IDLE)
+            sendCallState()
+            sendContactsFingerprint()
+            NotifListener.instance?.syncActiveNotifications()
+            gatewayAudioStatus()
+        } finally {
+            replayTarget.remove()
+        }
+        val input = DataInputStream(BufferedInputStream(s.inputStream, 16384))
+        try {
+            while (alive(gen)) {
+                val type = input.readUnsignedByte()
+                val len = input.readInt()
+                if (len < 0 || len > Protocol.MAX_FRAME) throw IOException("bad data from peer")
+                val data = ByteArray(len)
+                input.readFully(data)
+                rxTotal.addAndGet(len.toLong() + 5L)
+                if (type == Protocol.TYPE_CMD) {
+                    commandSender.set(peer)
+                    try {
+                        synchronized(gatewayLock) { handleCommand(String(data, Charsets.UTF_8)) }
+                    } finally {
+                        commandSender.remove()
+                    }
+                }
+            }
+        } finally {
+            peers.remove(address.uppercase(), peer)
+            if (alive(gen)) Hub.log("$name disconnected")
+            updateGatewayConnection()
+        }
+    }
+
+    private fun updateGatewayConnection() {
+        val names = connectedRemoteNames
+        if (names.isEmpty()) setConn(false, if (running) "Waiting for the Remote phones…" else "Stopped")
+        else setConn(true, "Connected to ${names.joinToString(", ")}")
+    }
 
     /** Gateway: waits for the selected Remote. Connections from any other paired device are refused. */
     @SuppressLint("MissingPermission")
@@ -1032,6 +1200,7 @@ class LinkService : Service() {
     }
 
     private fun closeSocket() {
+        peers.values.forEach { runCatching { it.socket.close() } }
         try {
             socket?.close()
         } catch (e: Exception) {
@@ -1050,6 +1219,7 @@ class LinkService : Service() {
         } catch (e: Exception) {
         }
         closeSocket()
+        peers.clear()
         worker?.interrupt()
         worker = null
         writer = null
@@ -1070,7 +1240,48 @@ class LinkService : Service() {
         Hub.log("Stopped")
     }
 
+    private fun encodeFrame(parts: Array<out String>): String? {
+        val msg = parts.joinToString("|") { it.replace('|', '/') }
+        if (msg.toByteArray(Charsets.UTF_8).size > Protocol.MAX_FRAME) {
+            Hub.log("Not sent: ${parts.firstOrNull()} message is too large")
+            return null
+        }
+        return msg
+    }
+
+    /** Gateway: writes one frame to each of [targets]; a failed link is closed. */
+    private fun sendToPeers(targets: Collection<Peer>, msg: String) {
+        for (peer in targets) {
+            try {
+                io.execute {
+                    try {
+                        peer.writer.writeCmd(msg)
+                        txTotal.addAndGet(msg.toByteArray(Charsets.UTF_8).size.toLong() + 5L)
+                    } catch (e: Exception) {
+                        Hub.log("Send to ${peer.name} failed: ${e.message}")
+                        runCatching { peer.socket.close() }
+                    }
+                }
+            } catch (_: Exception) { }
+        }
+    }
+
+    /** Gateway: a reply only for the Remote that sent the command being handled. */
+    private fun replyToSender(vararg parts: String) {
+        val peer = commandSender.get()
+        if (role == ROLE_GATEWAY && peer != null) encodeFrame(parts)?.let { sendToPeers(listOf(peer), it) }
+        else send(*parts)
+    }
+
+    /** Sends to the other phone. On a Gateway: to every connected Remote (or only the one being caught up). */
     private fun send(vararg parts: String) {
+        if (role == ROLE_GATEWAY) {
+            val target = replayTarget.get()
+            val targets = if (target != null) listOf(target) else peers.values.toList()
+            if (targets.isEmpty()) return
+            encodeFrame(parts)?.let { sendToPeers(targets, it) }
+            return
+        }
         val w = writer
         if (w == null) {
             Hub.log("Not connected – command not sent")
@@ -1164,10 +1375,12 @@ class LinkService : Service() {
             "AUDIO_ROUTE" -> gatewaySetAudioRoute(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_RESULT" -> {
                 if (arg1 == "ROUTE_VERIFY") {
+                    gatewayAudioNote = audioOutcomeNote("ROUTE", p.getOrNull(2).orEmpty())
                     Hub.log("Gateway delayed speaker verification: ${p.getOrNull(2).orEmpty()}")
                     return
                 }
                 val id = p.getOrNull(3).orEmpty()
+                gatewayAudioNote = audioOutcomeNote(arg1, p.getOrNull(2).orEmpty())
                 val timeout = pendingAudioRequests.remove(id)
                 if (timeout != null) {
                     audioTimeoutHandler.removeCallbacks(timeout)
@@ -1186,7 +1399,7 @@ class LinkService : Service() {
             }
             "WHATSAPP_CHAT" -> {
                 val ok = gatewayWhatsAppChat(arg1)
-                send("WHATSAPP_CHAT_RESULT", if (ok) "OK" else "FAILED")
+                replyToSender("WHATSAPP_CHAT_RESULT", if (ok) "OK" else "FAILED")
             }
             "WHATSAPP_CALL" -> gatewayWhatsAppCall(arg1)
             "WHATSAPP_CALL_RESULT" -> {
@@ -1274,7 +1487,7 @@ class LinkService : Service() {
                 val ok = key != null && index >= 0 && (NotifListener.instance?.performAction(key, index) == true)
                 if (ok) Hub.log("Remote pressed \"$label\" on a call notification")
                 else Hub.log("Third-party call action failed or is no longer available")
-                send("NOTIF_ACTION_RESULT", if (ok) "OK" else "FAILED")
+                replyToSender("NOTIF_ACTION_RESULT", if (ok) "OK" else "FAILED")
             }
             "WHATSAPP_CALL_STATE" -> {
                 val pkg = decodeText(arg1)
@@ -1299,7 +1512,7 @@ class LinkService : Service() {
 
     private fun sendCallResult() {
         val error = callControlError
-        send("CALL_RESULT", if (error == null) "OK" else "FAILED", error?.removePrefix("FAILED: ") ?: "Android accepted the request")
+        replyToSender("CALL_RESULT", if (error == null) "OK" else "FAILED", error?.removePrefix("FAILED: ") ?: "Android accepted the request")
     }
 
     private fun setConn(isConnected: Boolean, text: String) {
@@ -1535,7 +1748,7 @@ class LinkService : Service() {
     }
 
     private fun sendCallState() {
-        if (writer != null) send("CALL", callState, callNumber, callName, callDirection)
+        if (writer != null || peers.isNotEmpty()) send("CALL", callState, callNumber, callName, callDirection)
     }
 
     @SuppressLint("MissingPermission")
@@ -1735,16 +1948,19 @@ class LinkService : Service() {
                     showOngoingCall()
                     if (previous != CALL_OFFHOOK) Hub.log("Call in progress on gateway (${logCaller()})")
                 } else {
+                    // Answered on the Gateway or on another Remote: this phone stops ringing but
+                    // keeps showing the call, with its controls, like every Remote.
                     simCallOnGateway = true
-                    nm.cancel(ID_INCOMING)
+                    showOngoingCall()
                     if (previous != CALL_OFFHOOK) {
-                        Hub.log(if (previous == CALL_RINGING) "Call answered on the Gateway" else "Call placed on the Gateway")
+                        Hub.log(if (previous == CALL_RINGING) "Call answered on the Gateway phone" else "Call placed on the Gateway phone")
                     }
                 }
             }
             else -> {
                 simCallHere = false
                 simCallOnGateway = false
+                gatewayAudioNote = null
                 stopSimRinging()
                 nm.cancel(ID_INCOMING)
                 if (previous != CALL_IDLE) Hub.log("Call ended")
@@ -1755,7 +1971,7 @@ class LinkService : Service() {
 
     /** Remote: re-posts the SIM call notification so its route switch names the other output. */
     private fun refreshCallNotificationsForRoute() {
-        if (role == ROLE_REMOTE && callState == CALL_OFFHOOK && simCallHere) showOngoingCall()
+        if (role == ROLE_REMOTE && callState == CALL_OFFHOOK) showOngoingCall()
     }
 
     private fun showOngoingCall() {
@@ -1763,7 +1979,7 @@ class LinkService : Service() {
         // updated in place when the Gateway call is answered or connects.
         val n = Notification.Builder(this, CH_CALLS)
             .setSmallIcon(android.R.drawable.sym_action_call)
-            .setContentTitle("Call in progress")
+            .setContentTitle(if (simCallOnGateway) "Answered on the Gateway phone" else "Call in progress")
             .setContentText(display())
             .setSubText("on the Gateway")
             .setCategory(Notification.CATEGORY_CALL)
@@ -1849,14 +2065,15 @@ class LinkService : Service() {
 
     /** Gateway: send the full contact list (on request from the Remote). */
     private fun sendContacts() {
-        val w = writer
-        if (w == null || !connected) {
+        // To the Remote that asked (or that just connected), else to every Remote.
+        val targets = listOfNotNull(commandSender.get() ?: replayTarget.get()).ifEmpty { peers.values.toList() }
+        if (targets.isEmpty() || !connected) {
             Hub.log("Contact sync unavailable: Bluetooth is disconnected")
             return
         }
         if (!has(Manifest.permission.READ_CONTACTS)) {
             Hub.log("Contacts permission missing – contacts not sent to Remote")
-            send("CONTACTS_RESULT", "FAILED", "Contacts permission is not granted on Gateway")
+            replyToSender("CONTACTS_RESULT", "FAILED", "Contacts permission is not granted on Gateway")
             return
         }
         val list = ContactStore.readDevice(this)
@@ -1866,11 +2083,17 @@ class LinkService : Service() {
                 try {
                     val frames = listOf("CONTACTS_BEGIN") + chunks.map { "CONTACTS|$it" } +
                         listOf("CONTACTS_END", "CONTACTS_RESULT|OK|${list.size}")
-                    for (frame in frames) {
-                        w.writeCmd(frame)
-                        txTotal.addAndGet(frame.toByteArray(Charsets.UTF_8).size.toLong() + 5L)
+                    for (peer in targets) {
+                        try {
+                            for (frame in frames) {
+                                peer.writer.writeCmd(frame)
+                                txTotal.addAndGet(frame.toByteArray(Charsets.UTF_8).size.toLong() + 5L)
+                            }
+                            Hub.log("Sent ${list.size} contacts to ${peer.name}")
+                        } catch (e: Exception) {
+                            Hub.log("Contacts sync to ${peer.name} failed: ${e.message}")
+                        }
                     }
-                    Hub.log("Sent ${list.size} contacts to Remote")
                 } catch (e: Exception) {
                     Hub.log("Contacts sync failed: ${e.message}")
                 }
@@ -1948,11 +2171,8 @@ class LinkService : Service() {
         val id = encKey.hashCode()
         val whatsapp = WhatsAppCalls.isWhatsApp(pkg)
         if (whatsapp) {
+            // Every Remote shows the Gateway's WhatsApp calls, whoever answered or started them.
             whatsappTracker.onCaller(pkg, title)
-            if (!whatsappTracker.shownHere(pkg)) {
-                hideMirroredCall(encKey)
-                return
-            }
         }
         val state = reportedState ?: WhatsAppCalls.stateFromActionLabels(actionLabels)
         val ringing = state == WhatsAppCalls.RINGING
@@ -2017,8 +2237,9 @@ class LinkService : Service() {
 
     /** Remote: the Gateway answered or started this WhatsApp call itself, so this phone lets go. */
     private fun onWhatsAppTakenByGateway(pkg: String) {
-        mirroredCalls.values.filter { it.pkg == pkg }.forEach { hideMirroredCall(it.key) }
-        Hub.log("WhatsApp call taken on the Gateway; not shown here")
+        // Answered on the Gateway or another Remote: stop ringing, keep showing the call.
+        mirroredCalls.values.filter { it.pkg == pkg }.forEach { stopMirrorRinging(it.key) }
+        Hub.log("WhatsApp call answered on the Gateway phone")
         Hub.notifyUi()
     }
 
