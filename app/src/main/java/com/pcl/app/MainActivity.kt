@@ -17,6 +17,8 @@ import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
+import dev.n2k02.updater.hasPendingUpdate
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -238,6 +240,7 @@ class MainActivity : ComponentActivity() {
                 (role != LinkService.ROLE_GATEWAY || notificationAccess)
         }
         var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
+        val updateStatus by LiveUpdater.controller.status.collectAsState()
         val unseenMissed by CallHistory.unseenMissed.collectAsState()
         // Calls is the Remote's tab; a notification may ask for it.
         LaunchedEffect(requestedTab, remote, setupReady) {
@@ -282,8 +285,8 @@ class MainActivity : ComponentActivity() {
                             label = { Text("Calls") }
                         )
                     }
-                    NavigationBarItem(selected = screen == MainTab.UPDATE, onClick = { screen = MainTab.UPDATE }, icon = { Icon(Icons.Default.Download, null) }, label = { Text("Update") })
-                    NavigationBarItem(selected = screen == MainTab.SETTINGS, onClick = { screen = MainTab.SETTINGS }, icon = { Icon(Icons.Default.Settings, null) }, label = { Text("Settings") })
+                    NavigationBarItem(selected = screen == MainTab.UPDATE, onClick = { screen = MainTab.UPDATE }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Download, "Update") } }, label = { Text("Update") })
+                    NavigationBarItem(selected = screen == MainTab.SETTINGS, onClick = { screen = MainTab.SETTINGS }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
                 }
             }
         ) { insets ->
@@ -452,6 +455,13 @@ class MainActivity : ComponentActivity() {
                 }
 
                 if (screen == MainTab.SETTINGS) {
+                    androidx.compose.material3.ListItem(
+                        headlineContent = { Text("About & updates") },
+                        supportingContent = { Text(if (updateStatus.hasPendingUpdate()) "A new update is available" else "App version and update checks") },
+                        leadingContent = { Icon(Icons.Default.Download, null) },
+                        trailingContent = { dev.n2k02.updater.N2K02UpdateBadge(updateStatus) },
+                        modifier = Modifier.clickable { screen = MainTab.UPDATE },
+                    )
                     Text("Setup & settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                     Text("Choose a role and grant every required permission. Home unlocks when setup is complete.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -528,27 +538,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (screen == MainTab.UPDATE) {
-                    Text("About & updates", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                    androidx.compose.material3.ListItem(
-                        headlineContent = { Text("PCL") },
-                        supportingContent = { Text("Version " + AppUpdater.installedVersionName) },
-                        leadingContent = { Icon(Icons.Default.Settings, null) },
-                    )
+                    dev.n2k02.updater.N2K02UpdateTitle()
                     val experimentalEnabled = LiveUpdater.experimentalEnabled.collectAsState().value
-                    androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Experimental updates", style = MaterialTheme.typography.titleSmall)
-                            Text("Offer signed APKs from successful pull request builds. Test builds may have bugs.")
-                        }
-                        androidx.compose.material3.Switch(
-                            checked = experimentalEnabled,
-                            onCheckedChange = LiveUpdater::setExperimentalEnabled,
-                        )
-                    }
-                    androidx.compose.material3.HorizontalDivider()
                     dev.n2k02.updater.N2K02UpdateScreen(
                         controller = LiveUpdater.controller,
                         installGuard = LiveUpdater.installGuard,
+                        experimentalEnabled = experimentalEnabled,
+                        onExperimentalEnabledChange = LiveUpdater::setExperimentalEnabled,
                     )
                 }
                 if (screen == MainTab.SETTINGS) {
