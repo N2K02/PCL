@@ -26,6 +26,19 @@ class PageHeaderContractTest {
         assertTrue("Missing application name in header", header.contains("Text(\"PCL\""))
     }
 
+    @Test fun quitLivesBesideSettingsInBottomNavigation() {
+        val screen = source()
+        val header = screen.substringAfter("topBar = {").substringBefore("bottomBar = {")
+        val bottomBar = screen.substringAfter("bottomBar = {").substringBefore(") { insets ->")
+
+        assertFalse("Quit must not be in the top header", header.contains("quitApp()"))
+        assertTrue("Settings must remain in the bottom bar", bottomBar.contains("label = { Text(\"Settings\") }"))
+        assertTrue("Quit must be in the bottom bar", bottomBar.contains("label = { Text(\"Quit\") }"))
+        assertTrue("Quit must use the existing app shutdown action", bottomBar.contains("onClick = { quitApp() }"))
+        assertTrue("Quit must be after Settings", bottomBar.indexOf("label = { Text(\"Quit\") }") >
+            bottomBar.indexOf("label = { Text(\"Settings\") }"))
+    }
+
     @Test fun appTitleIsNotProvidedBySharedUpdater() {
         val header = source().substringAfter("topBar = {")
             .substringBefore("bottomBar = {")
