@@ -28,7 +28,7 @@ class RequiredPermissionsTest {
 
     @Test fun everyRequiredPermissionIsDeclaredInTheManifest() {
         val manifest = listOf("src/main/AndroidManifest.xml", "app/src/main/AndroidManifest.xml")
-            .map(::java.io.File).first { it.isFile }.readText()
+            .map { java.io.File(it) }.first { it.isFile }.readText()
         for (p in gateway + remote) assertTrue("$p missing from the manifest", manifest.contains("\"$p\""))
     }
 }
