@@ -100,6 +100,7 @@ class LinkService : Service() {
         private const val ID_WHATSAPP_HANDOFF = 42
         private const val ID_MISSED = 46
         private const val ID_MISSED_WHATSAPP = 47
+        private const val ID_SETUP = 48
         private const val TRAFFIC_SAMPLE_MS = 5_000L
         private const val CALL_CONTROL_TIMEOUT_MS = 15_000L
         /** Remote: stop ringing for a mirrored call after this long, whatever happens. */
@@ -564,10 +565,34 @@ class LinkService : Service() {
             return
         }
         if (reason != null) Hub.log("Link restarted $reason")
+        warnIfSetupIncomplete()
         trafficHandler.removeCallbacks(trafficSampler)
         trafficHandler.postDelayed(trafficSampler, TRAFFIC_SAMPLE_MS)
         if (role == ROLE_GATEWAY) registerPhoneReceiver()
         startWorker()
+    }
+
+    /**
+     * PCL can be restarted after a reboot or update with a permission missing (revoked, or new
+     * in this version). Say so in the log and with a notification that opens the checklist.
+     */
+    private fun warnIfSetupIncomplete() {
+        val missing = RequiredPermissions.missingNames(this, role)
+        if (missing.isEmpty()) { nm.cancel(ID_SETUP); return }
+        Hub.log("Setup incomplete, missing: ${missing.joinToString(", ")}")
+        val open = PendingIntent.getActivity(
+            this, 48, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        try {
+            nm.notify(ID_SETUP, Notification.Builder(this, CH_STATUS)
+                .setSmallIcon(android.R.drawable.stat_sys_warning)
+                .setContentTitle("PCL needs permissions")
+                .setContentText("Tap to allow: ${missing.joinToString(", ")}")
+                .setContentIntent(open)
+                .setAutoCancel(true)
+                .build())
+        } catch (_: Exception) { }
     }
 
     // ---------------------------------------------------------------- public actions (UI)

@@ -58,6 +58,9 @@ import androidx.compose.ui.unit.sp
 
 private enum class MainTab { HOME, CALLS, UPDATE, SETTINGS }
 
+/** Permissions PCL has asked for before, to know when Android stops showing its dialog. */
+private const val PREF_ASKED_PERMISSIONS = "asked_permissions"
+
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
     private var revision by mutableIntStateOf(0)
@@ -69,6 +72,8 @@ class MainActivity : ComponentActivity() {
     private var loadedContactsVersion = -1
     /** A tab asked for by a notification (the missed-call one opens Calls). */
     private var requestedTab by mutableStateOf<MainTab?>(null)
+    /** Set when setup is incomplete: the screen opens the permission checklist. */
+    private var showPermissions by mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,6 +112,15 @@ class MainActivity : ComponentActivity() {
         Hub.listener = { refresh() }
         LiveUpdater.onResume(this)
         refresh()
+        // A permission missing (never given, revoked, or new in this version): go straight to
+        // the checklist and ask for all of them once.
+        if (roleSelected && !setupComplete()) {
+            showPermissions = true
+            if (!autoRequested) {
+                autoRequested = true
+                requestMissingPermissions()
+            }
+        }
     }
 
     override fun onPause() {
@@ -121,40 +135,72 @@ class MainActivity : ComponentActivity() {
         refresh()
     }
 
-    private fun corePerms(): List<String> {
-        // PCL relays call control and status; Android manages cellular-call audio.
-        val l = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= 31) l.add(Manifest.permission.BLUETOOTH_CONNECT)
-        if (Build.VERSION.SDK_INT >= 33) l.add(Manifest.permission.POST_NOTIFICATIONS)
-        return l
-    }
-
-    private fun gatewayPerms(): List<String> = listOf(
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.ANSWER_PHONE_CALLS,
-        Manifest.permission.CALL_PHONE
-    )
+    private fun requiredPerms(): List<String> = RequiredPermissions.runtime(role, Build.VERSION.SDK_INT)
 
     private fun granted(p: String) = checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
 
+    /** True once every required permission and special access for the role is in place. */
+    private fun setupComplete(): Boolean = roleSelected && RequiredPermissions.missingNames(this, role).isEmpty()
+
+    /** Asked automatically at most once per app launch, so a refusal can't loop the dialog. */
+    private var autoRequested = false
+
+    /** Asks for every missing required permission at once; denied-for-good ones open App info. */
     private fun requestMissingPermissions() {
-        // Call log is optional (Start works without it) but needed for caller numbers, so ask for it too.
-        val needed = corePerms() + if (role == LinkService.ROLE_GATEWAY) gatewayPerms() + Manifest.permission.READ_CALL_LOG else emptyList()
-        val missing = needed.distinct().filterNot { granted(it) }
-        if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1) else refresh()
+        val missing = RequiredPermissions.missingRuntime(this, role)
+        if (missing.isEmpty()) {
+            if (role == LinkService.ROLE_GATEWAY && !NotifListener.isEnabled(this)) openNotificationAccess()
+            else refresh()
+            return
+        }
+        val blocked = missing.filter(::deniedForGood)
+        if (blocked.size == missing.size) {
+            openAppInfo(blocked.map(RequiredPermissions::label).distinct())
+            return
+        }
+        markAsked(missing)
+        requestPermissions(missing.toTypedArray(), 1)
+    }
+
+    /** Asks for one permission, or opens App info when Android no longer shows its dialog. */
+    private fun requestPermission(permission: String) {
+        if (granted(permission)) return
+        if (deniedForGood(permission)) { openAppInfo(listOf(RequiredPermissions.label(permission))); return }
+        markAsked(listOf(permission))
+        requestPermissions(arrayOf(permission), 1)
+    }
+
+    /** Asked before and refused with no rationale left: Android silently ignores new requests. */
+    private fun deniedForGood(permission: String): Boolean =
+        !granted(permission) && permission in askedPermissions() && !shouldShowRequestPermissionRationale(permission)
+
+    private fun askedPermissions(): Set<String> = prefs.getStringSet(PREF_ASKED_PERMISSIONS, emptySet()).orEmpty()
+
+    private fun markAsked(permissions: List<String>) {
+        prefs.edit().putStringSet(PREF_ASKED_PERMISSIONS, askedPermissions() + permissions).apply()
+    }
+
+    private fun openAppInfo(names: List<String>) {
+        toast("Allow ${names.joinToString(", ")} in Permissions. Greyed out? Tap ⋮ → Allow restricted settings first.")
+        runCatching {
+            startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)))
+        }.onFailure { toast("Open Android Settings → Apps → PCL → Permissions") }
+    }
+
+    private fun openNotificationAccess() {
+        runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
+            .onFailure { toast("Open Android Settings → Notifications → Notification access") }
     }
 
     private fun currentRole(): String = Hub.service?.takeIf { it.isActive }?.role ?: role
 
     private fun startLink() {
         val chosenRole = role
-        val needed = if (chosenRole == LinkService.ROLE_GATEWAY) corePerms() + gatewayPerms() else corePerms()
-        val missing = needed.filter { !granted(it) }
+        val missing = RequiredPermissions.missingNames(this, chosenRole)
         if (missing.isNotEmpty()) {
-            requestPermissions(
-                missing.distinct().filter { !granted(it) }.toTypedArray(), 2
-            )
-            toast("Please allow the permissions, then press Start again")
+            toast("PCL needs ${missing.joinToString(", ")} first")
+            showPermissions = true
+            requestMissingPermissions()
             return
         }
         // Both roles need the other phone: the Remote connects to it, and the Gateway
@@ -236,10 +282,8 @@ class MainActivity : ComponentActivity() {
         val callState = service?.callState ?: LinkService.CALL_IDLE
         val notificationAccess = NotifListener.isEnabled(this)
         val setupReady = remember(revision, role, roleSelected, notificationAccess) {
-            val required = corePerms() + if (role == LinkService.ROLE_GATEWAY) gatewayPerms() else emptyList()
             // Only the Gateway reads notifications; the Remote has no WhatsApp to watch.
-            roleSelected && required.distinct().all { granted(it) } &&
-                (role != LinkService.ROLE_GATEWAY || notificationAccess)
+            setupComplete()
         }
         var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
         var showingPermissions by remember { mutableStateOf(false) }
@@ -257,6 +301,10 @@ class MainActivity : ComponentActivity() {
             }
         }
         LaunchedEffect(remote) { if (!remote && screen == MainTab.CALLS) screen = MainTab.HOME }
+        LaunchedEffect(showPermissions, setupReady) {
+            if (showPermissions && !setupReady) { screen = MainTab.SETTINGS; showingPermissions = true }
+            if (setupReady) showPermissions = false
+        }
 
         Scaffold(
             topBar = {
@@ -577,7 +625,7 @@ class MainActivity : ComponentActivity() {
                 if (screen == MainTab.HOME && !setupReady) {
                     Text("Complete setup first", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                     SectionCard(title = "Home locked", subtitle = "Grant the required permissions in Settings to enable the connection controls.") {
-                        Button(onClick = { screen = MainTab.SETTINGS }, modifier = Modifier.fillMaxWidth()) { Text("Open Settings") }
+                        Button(onClick = { screen = MainTab.SETTINGS; showingPermissions = true; requestMissingPermissions() }, modifier = Modifier.fillMaxWidth()) { Text("Allow permissions") }
                     }
                 }
                 if (screen == MainTab.UPDATE) {
@@ -592,23 +640,23 @@ class MainActivity : ComponentActivity() {
                 if (screen == MainTab.SETTINGS && showingPermissions) {
                     SectionCard(title = "Permissions", subtitle = if (roleSelected) "Required access for the selected phone role." else "Select a role above to see its setup checklist.") {
                         if (roleSelected && role == LinkService.ROLE_GATEWAY) {
-                            if (Build.VERSION.SDK_INT >= 33) PermissionSetupRow("Notifications", "Show the ongoing PCL status", granted(Manifest.permission.POST_NOTIFICATIONS)) { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1) }
-                            PermissionSetupRow("Phone state", "Detect incoming and active SIM calls", granted(Manifest.permission.READ_PHONE_STATE)) { requestPermissions(arrayOf(Manifest.permission.READ_PHONE_STATE), 1) }
-                            PermissionSetupRow("Answer calls", "Allow call answering requests", granted(Manifest.permission.ANSWER_PHONE_CALLS)) { requestPermissions(arrayOf(Manifest.permission.ANSWER_PHONE_CALLS), 1) }
-                            PermissionSetupRow("Place calls", "Place calls through the gateway SIM", granted(Manifest.permission.CALL_PHONE)) { requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 1) }
-                            PermissionSetupRow("Contacts (for sync)", "Send Gateway contacts to the Remote and resolve caller names", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
-                            PermissionSetupRow("Call log (caller numbers)", "Android only gives the caller's number, or tells a private number apart, with this", granted(Manifest.permission.READ_CALL_LOG)) { requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 1) }
-                            PermissionSetupRow("Notification access", "Send notifications and WhatsApp calls to the Remote", notificationAccess, actionLabel = "Open settings") { runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }.onFailure { toast("Open Android Settings → Notifications → Notification access") } }
+                            if (Build.VERSION.SDK_INT >= 33) PermissionSetupRow("Notifications", "Show the ongoing PCL status", granted(Manifest.permission.POST_NOTIFICATIONS)) { requestPermission(Manifest.permission.POST_NOTIFICATIONS) }
+                            PermissionSetupRow("Phone state", "Detect incoming and active SIM calls", granted(Manifest.permission.READ_PHONE_STATE)) { requestPermission(Manifest.permission.READ_PHONE_STATE) }
+                            PermissionSetupRow("Answer calls", "Allow call answering requests", granted(Manifest.permission.ANSWER_PHONE_CALLS)) { requestPermission(Manifest.permission.ANSWER_PHONE_CALLS) }
+                            PermissionSetupRow("Place calls", "Place calls through the gateway SIM", granted(Manifest.permission.CALL_PHONE)) { requestPermission(Manifest.permission.CALL_PHONE) }
+                            PermissionSetupRow("Contacts", "Caller names, and sending contacts to the Remote", granted(Manifest.permission.READ_CONTACTS)) { requestPermission(Manifest.permission.READ_CONTACTS) }
+                            PermissionSetupRow("Call log", "Android only gives the caller's number, or tells a private number apart, with this", granted(Manifest.permission.READ_CALL_LOG)) { requestPermission(Manifest.permission.READ_CALL_LOG) }
+                            PermissionSetupRow("Notification access", "Send notifications and WhatsApp calls to the Remote", notificationAccess, actionLabel = "Open settings") { openNotificationAccess() }
                             val callHelperEnabled = WhatsappCallAccessibilityService.isEnabled(this@MainActivity)
                             PermissionSetupRow("WhatsApp calls (optional)", "Accessibility service \"PCL WhatsApp call helper\": lets PCL start the WhatsApp calls the Remote asks for", callHelperEnabled, actionLabel = "Open settings") {
                                 runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
                                     .onFailure { toast("Open Android Settings → Accessibility → Installed apps → PCL WhatsApp call helper") }
                             }
-                            if (Build.VERSION.SDK_INT >= 31) PermissionSetupRow("Bluetooth connection", "Connect to the paired remote phone", granted(Manifest.permission.BLUETOOTH_CONNECT)) { requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1) }
+                            if (Build.VERSION.SDK_INT >= 31) PermissionSetupRow("Bluetooth connection", "Connect to the paired remote phone", granted(Manifest.permission.BLUETOOTH_CONNECT)) { requestPermission(Manifest.permission.BLUETOOTH_CONNECT) }
                         } else if (roleSelected) {
-                            PermissionSetupRow("Local contacts (optional)", "Include this phone's contacts in Remote search", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
-                            if (Build.VERSION.SDK_INT >= 31) PermissionSetupRow("Bluetooth connection", "Find and connect to the paired gateway phone", granted(Manifest.permission.BLUETOOTH_CONNECT)) { requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1) }
-                            if (Build.VERSION.SDK_INT >= 33) PermissionSetupRow("Notifications", "Show the ongoing PCL status", granted(Manifest.permission.POST_NOTIFICATIONS)) { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1) }
+                            PermissionSetupRow("Local contacts (optional)", "Include this phone's contacts in Remote search", granted(Manifest.permission.READ_CONTACTS)) { requestPermission(Manifest.permission.READ_CONTACTS) }
+                            if (Build.VERSION.SDK_INT >= 31) PermissionSetupRow("Bluetooth connection", "Find and connect to the paired gateway phone", granted(Manifest.permission.BLUETOOTH_CONNECT)) { requestPermission(Manifest.permission.BLUETOOTH_CONNECT) }
+                            if (Build.VERSION.SDK_INT >= 33) PermissionSetupRow("Notifications", "Show the ongoing PCL status", granted(Manifest.permission.POST_NOTIFICATIONS)) { requestPermission(Manifest.permission.POST_NOTIFICATIONS) }
                         } else {
                             Text("Choose Gateway or Remote above to load the matching permission checklist.")
                         }
@@ -636,6 +684,10 @@ class MainActivity : ComponentActivity() {
                                 Text(if (setupReady) "Setup complete" else "Setup incomplete", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                                 Text(if (setupReady) "All required permissions are granted. Home is enabled." else "Use Set up beside each item that needs attention. Home remains disabled until required permissions are ready.", style = MaterialTheme.typography.bodyMedium)
                                 if (setupReady) Button(onClick = { screen = MainTab.HOME }, modifier = Modifier.fillMaxWidth()) { Text("Open Home") }
+                                else {
+                                    Text("Missing: " + RequiredPermissions.missingNames(this@MainActivity, role).joinToString(", "), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+                                    Button(onClick = { requestMissingPermissions() }, modifier = Modifier.fillMaxWidth()) { Text("Allow all missing") }
+                                }
                             }
                         }
                         HorizontalDivider()
