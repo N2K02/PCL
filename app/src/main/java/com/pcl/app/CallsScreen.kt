@@ -253,7 +253,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     valueRange = 0f..ui.gatewayMaxVolume.coerceAtLeast(1).toFloat(),
                     steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0))
                 Text("SIM audio output: " + ui.gatewayAudioRoute)
-                RouteSwitchButton(ui.gatewayAudioRoute, ui.callState == LinkService.CALL_OFFHOOK, actions::setGatewayRoute)
+                RouteSwitchButton(ui.gatewayAudioRoute, ui.callState == LinkService.CALL_OFFHOOK, { actions.setGatewayRoute(it) })
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 if (ringing) {
@@ -370,7 +370,7 @@ private fun AppCallCard(call: LinkService.MirrorCall, ui: CallsUi, actions: Call
             )
             if (call.pkg.startsWith("com.whatsapp") && !call.ringing && ui.connected) {
                 Text("Experimental audio route · " + ui.gatewayAudioRoute)
-                RouteSwitchButton(ui.gatewayAudioRoute, true, actions::setGatewayRoute)
+                RouteSwitchButton(ui.gatewayAudioRoute, true, { actions.setGatewayRoute(it) })
                 Text("WhatsApp may override the selected route.",
                     style = MaterialTheme.typography.bodySmall)
             }
