@@ -1084,7 +1084,9 @@ class LinkService : Service() {
                 val number = CallerId.asNumber(p.getOrElse(2) { "" })
                 val name = CallerId.asName(p.getOrElse(3) { "" })
                 val withheld = p.getOrElse(4) { "0" } == "1"
+                Hub.log("Gateway call log: ${if (withheld) "withheld number" else if (number.isNotEmpty()) logCaller(number) else "no number"}")
                 CallHistory.amendSim(started, number, name, withheld)
+                    ?.also { Hub.log("Recents updated from the Gateway's call log") }
                     ?.takeIf { it.type == CallHistory.Type.MISSED }
                     ?.let(::showMissedCall)
             }
@@ -1277,6 +1279,14 @@ class LinkService : Service() {
                 callName = CallerId.PRIVATE
                 gotNumber = true
             }
+            if (newState == CALL_RINGING) {
+                val source = when {
+                    num.isNotEmpty() -> "number received"
+                    hasNumberExtra -> "number withheld or empty"
+                    else -> "no number in this update"
+                }
+                Hub.log("Ringing: $source; call log permission ${if (has(Manifest.permission.READ_CALL_LOG)) "granted" else "MISSING"}")
+            }
             val changed = newState != callState
             if (changed && newState == CALL_RINGING) callControlError = null
             callState = newState
@@ -1409,13 +1419,17 @@ class LinkService : Service() {
      * or marks it withheld. That is sent to the Remote to correct its Recents entry.
      */
     private fun reportLoggedCallLater(startedMs: Long) {
-        if (!has(Manifest.permission.READ_CALL_LOG)) return
+        if (!has(Manifest.permission.READ_CALL_LOG)) {
+            Hub.log("Call log permission missing: can't send the caller's number to the Remote's Recents")
+            return
+        }
         val attempts = intArrayOf(0)
         val task = object : Runnable {
             override fun run() {
                 val logged = readLoggedCall(startedMs)
                 if (logged == null) {
                     if (++attempts[0] < 4) trafficHandler.postDelayed(this, 1_500L)
+                    else Hub.log("Call log: no entry found for the call that just ended")
                     return
                 }
                 val (number, name, withheld) = logged

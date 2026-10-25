@@ -330,6 +330,7 @@ class NotifListener : NotificationListenerService() {
         val number = (uris + labels + text).firstNotNullOfOrNull { CallerId.asNumber(it).ifEmpty { null } }.orEmpty()
         val name = labels.firstNotNullOfOrNull { CallerId.asName(it).ifEmpty { null } }.orEmpty()
         val withheld = number.isEmpty() && (labels + text).any(CallerId::isPrivate)
+        Hub.log("Phone app notification: number ${if (number.isNotEmpty()) "found" else "not shown"}, name ${if (name.isNotEmpty()) "found" else "not shown"}${if (withheld) ", private" else ""}")
         svc.updateCallerFromNotification(number, name, withheld)
     }
 
