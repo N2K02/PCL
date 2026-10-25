@@ -14,9 +14,11 @@ internal object CallerDisplay {
         "incoming call", "ongoing call", "call in progress", "phone",
     )
 
-    private fun clean(value: String): String = value.trim().takeUnless {
-        it.lowercase(Locale.ROOT) in placeholders
-    }.orEmpty()
+    private fun clean(value: String): String {
+        val trimmed = value.trim()
+        val normalized = trimmed.replace(Regex("\\s+"), " ").lowercase(Locale.ROOT)
+        return trimmed.takeUnless { normalized in placeholders }.orEmpty()
+    }
 
     fun name(value: String): String = clean(value)
 

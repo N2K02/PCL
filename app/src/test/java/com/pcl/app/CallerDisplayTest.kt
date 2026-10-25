@@ -22,6 +22,13 @@ class CallerDisplayTest {
         assertEquals("-", CallerDisplay.callDisplay("Unknown", "Withheld"))
     }
 
+    @Test fun normalizeOemPlaceholderVariantsWithoutTouchingNumbers() {
+        assertEquals("", CallerDisplay.number(" Unknown   number "))
+        assertEquals("", CallerDisplay.name("\tPrivate   Caller\n"))
+        assertEquals("+230 5555 1234", CallerDisplay.number(" +230 5555 1234 "))
+        assertEquals("Alice Smith", CallerDisplay.name(" Alice Smith "))
+    }
+
     @Test fun avoidInvalidNumbersInCallActions() {
         assertEquals("", CallerDisplay.number("  UNKNOWN  "))
         assertEquals("", CallerDisplay.number("-"))

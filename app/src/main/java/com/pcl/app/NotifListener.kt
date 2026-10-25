@@ -206,12 +206,13 @@ class NotifListener : NotificationListenerService() {
         val callNotification = whatsappCall || n.category == Notification.CATEGORY_CALL || isCallStyle(n) ||
             (sbn.isOngoing && labels.any { WhatsAppCalls.containsAny(it, GENERIC_CALL_ACTIONS) })
 
+        var metadataChanged = false
         if (callNotification) {
             // Call-style notifications may carry the caller only as a Person.
             val structuredCaller = callerName(ex)
             if (structuredCaller.isNotBlank()) title = structuredCaller
             val metadataSignature = sbn.packageName + "|" + structuredCaller.isNotBlank() + "|" + title.isNotBlank() + "|" + callState
-            val metadataChanged = synchronized(lastCallMetadata) {
+            metadataChanged = synchronized(lastCallMetadata) {
                 lastCallMetadata.put(sbn.key, metadataSignature) != metadataSignature
             }
             if (metadataChanged) Hub.log("Call notification metadata: package=${sbn.packageName}, person=${structuredCaller.isNotBlank()}, title=${title.isNotBlank()}, state=${callState ?: "unknown"}")
@@ -240,7 +241,7 @@ class NotifListener : NotificationListenerService() {
             // SIM calls already have PCL's own call notification on the Remote. The Phone
             // app's buttons are kept here only as a fallback for answering and ending.
             if (sbn.packageName == defaultDialer()) {
-                if (svc.simCallStartedAt() > 0L && sbn.postTime + 5000L < svc.simCallStartedAt()) return
+                if (!DialerCallerDetails.belongsToCurrentCall(sbn.postTime, svc.simCallStartedAt())) return
                 synchronized(dialerCallKeys) { dialerCallKeys.add(sbn.key) }
                 val caller = dialerCaller(sbn)
                 // Some dialers post their notification before the phone-state receiver runs.
@@ -338,7 +339,7 @@ class NotifListener : NotificationListenerService() {
                         WhatsAppCalls.containsAny(relay.label, GENERIC_CALL_ACTIONS)
                     })
             }
-            .filter { startedAt <= 0L || it.postTime + 5000L >= startedAt }
+            .filter { DialerCallerDetails.belongsToCurrentCall(it.postTime, startedAt) }
             .sortedByDescending { it.postTime }
             .forEach { sbn ->
                 val caller = dialerCaller(sbn)
@@ -354,10 +355,13 @@ class NotifListener : NotificationListenerService() {
     private fun dialerCaller(sbn: StatusBarNotification): DialerCallerDetails.Identity {
         val ex = sbn.notification.extras ?: return DialerCallerDetails.Identity("", "")
         val person = callerPerson(ex)
-        val title = (ex.getCharSequence(Notification.EXTRA_TITLE)
-            ?: ex.getCharSequence(Notification.EXTRA_TITLE_BIG))?.toString().orEmpty()
-        val text = (ex.getCharSequence(Notification.EXTRA_BIG_TEXT)
-            ?: ex.getCharSequence(Notification.EXTRA_TEXT))?.toString()
+        val title = ex.getCharSequence(Notification.EXTRA_TITLE)?.toString()
+            ?.takeIf(String::isNotBlank)
+            ?: ex.getCharSequence(Notification.EXTRA_TITLE_BIG)?.toString().orEmpty()
+        val text = ex.getCharSequence(Notification.EXTRA_BIG_TEXT)?.toString()
+            ?.takeIf(String::isNotBlank)
+            ?: ex.getCharSequence(Notification.EXTRA_TEXT)?.toString()
+                ?.takeIf(String::isNotBlank)
             ?: ex.getCharSequenceArray(Notification.EXTRA_TEXT_LINES)?.joinToString("\n").orEmpty()
         return DialerCallerDetails.fromNotification(
             personUri = person?.uri.orEmpty(),

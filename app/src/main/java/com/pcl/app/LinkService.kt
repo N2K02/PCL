@@ -1231,7 +1231,7 @@ class LinkService : Service() {
         override fun onReceive(c: Context, i: Intent) {
             val st = i.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
             @Suppress("DEPRECATION")
-            val num = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
+            val num = CallerDisplay.number(i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER).orEmpty())
             val previousState = callState
             val newState = when (st) {
                 TelephonyManager.EXTRA_STATE_RINGING -> CALL_RINGING
@@ -1241,8 +1241,8 @@ class LinkService : Service() {
             if (newState == CALL_RINGING && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "INCOMING"; callNumber = ""; callName = "" }
             else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "OUTGOING" }
             else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
-            val gotNumber = !num.isNullOrEmpty() && num != callNumber
-            if (!num.isNullOrEmpty()) {
+            val gotNumber = num.isNotEmpty() && num != callNumber
+            if (num.isNotEmpty()) {
                 callNumber = num
                 callName = lookupName(num)
             }

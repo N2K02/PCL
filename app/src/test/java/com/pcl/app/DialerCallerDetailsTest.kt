@@ -46,6 +46,21 @@ class DialerCallerDetailsTest {
         assertEquals("Alice", caller(title = "Alice").name)
     }
 
+    @Test fun acceptsBlankTitleFallbackAndMultiplePhoneSources() {
+        val parsed = caller(uri = "", person = "No Caller ID", compat = "Unknown caller",
+            title = "+230 5555 1234", text = "Incoming call")
+        assertEquals("+230 5555 1234", parsed.number)
+        assertEquals("", parsed.name)
+        assertEquals("Alice", caller(person = "Unknown", people = "Alice", text = "55551234").name)
+    }
+
+    @Test fun respectsCallNotificationAgeBoundary() {
+        assertEquals(true, DialerCallerDetails.belongsToCurrentCall(5_000L, 10_000L))
+        assertEquals(false, DialerCallerDetails.belongsToCurrentCall(4_999L, 10_000L))
+        assertEquals(true, DialerCallerDetails.belongsToCurrentCall(10_001L, 10_000L))
+        assertEquals(true, DialerCallerDetails.belongsToCurrentCall(1L, 0L))
+    }
+
     @Test fun doesNotInventShortOrEmbeddedNumbers() {
         assertEquals("", caller(text = "Call 1234").number)
         assertEquals("", caller(title = "1234").number)

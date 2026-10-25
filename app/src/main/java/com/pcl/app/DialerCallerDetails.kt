@@ -9,6 +9,10 @@ internal object DialerCallerDetails {
 
     private val phonePattern = Regex("""^[+]?[0-9(][0-9() .-]{3,28}[0-9]$""")
 
+    /** Avoid reviving a previous call's notification after a new call starts. */
+    fun belongsToCurrentCall(postedAtMs: Long, startedAtMs: Long): Boolean =
+        startedAtMs <= 0 || postedAtMs >= startedAtMs - 5_000L
+
     private fun phoneNumber(value: String): String {
         val trimmed = value.trim()
         val raw = if (trimmed.startsWith("tel:", ignoreCase = true)) trimmed.substring(4) else trimmed
