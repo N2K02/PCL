@@ -7,7 +7,7 @@ package com.pcl.app
 internal object DialerCallerDetails {
     data class Identity(val number: String, val name: String)
 
-    private val phonePattern = Regex("""^\\+?[0-9(][0-9() .-]{3,28}[0-9]$""")
+    private val phonePattern = Regex("""^[+]?[0-9(][0-9() .-]{3,28}[0-9]$""")
 
     private fun phoneNumber(value: String): String {
         val trimmed = value.trim()
