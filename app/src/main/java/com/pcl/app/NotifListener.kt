@@ -414,6 +414,8 @@ class NotifListener : NotificationListenerService() {
                 "reject" -> WhatsAppCalls.isDecline(label)
                 // System dialers often label the button just "End".
                 "end" -> WhatsAppCalls.isEnd(label) || WhatsAppCalls.containsAny(label, listOf("end"))
+                // Toggles loudspeaker / earpiece; the caller checks the route first.
+                "speaker" -> WhatsAppCalls.isSpeaker(label)
                 else -> false
             }
         } ?: return false

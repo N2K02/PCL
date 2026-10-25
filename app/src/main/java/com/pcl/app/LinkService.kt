@@ -204,8 +204,14 @@ class LinkService : Service() {
         try {
             val before = audio.getStreamVolume(stream)
             audio.adjustStreamVolume(stream, if (delta > 0) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER, 0)
-            val after = audio.getStreamVolume(stream)
-            Hub.log("Gateway audio step: stream=$stream, $before -> $after")
+            var after = audio.getStreamVolume(stream)
+            if (after == before) {
+                // Some phones ignore adjust requests from a background app; set the level instead.
+                val target = (before + delta).coerceIn(0, audio.getStreamMaxVolume(stream))
+                if (target != before) runCatching { audio.setStreamVolume(stream, target, 0) }
+                after = audio.getStreamVolume(stream)
+            }
+            Hub.log("Gateway audio step: stream=$stream, mode=${audio.mode}, $before -> $after")
             send("AUDIO_RESULT", "STEP", if (after != before) "APPLIED" else "NOT_APPLIED", requestId)
         } catch (e: Exception) {
             Hub.log("Gateway audio step failed: ${e.message ?: e.javaClass.simpleName}")
@@ -269,7 +275,7 @@ class LinkService : Service() {
         }
     }
 
-    private fun gatewaySetAudioRoute(route: String, requestId: String = "") {
+    private fun gatewaySetAudioRoute(route: String, requestId: String = "", allowDialerAction: Boolean = true) {
         if (route !in setOf("SPEAKER", "EARPIECE")) {
             send("AUDIO_RESULT", "ROUTE", "INVALID", requestId)
             return
@@ -285,8 +291,31 @@ class LinkService : Service() {
             gatewayAudioStatus()
             return
         }
+        val current = gatewayRoute(audio)
+        if (current == route) {
+            Hub.log("Gateway audio route already $route")
+            send("AUDIO_RESULT", "ROUTE", "APPLIED", requestId)
+            gatewayAudioStatus()
+            return
+        }
+        // A SIM call's audio belongs to the Phone app: press its own Speaker button
+        // (notification action) first, as other apps' routing is overridden by Android.
+        if (allowDialerAction && callState != CALL_IDLE && current in setOf("SPEAKER", "EARPIECE") &&
+            NotifListener.instance?.performCallAction("speaker") == true) {
+            Hub.log("Gateway audio route: pressed the Phone app's Speaker button for $route")
+            send("AUDIO_RESULT", "ROUTE", "FALLBACK_QUEUED", requestId)
+            // If the button didn't move the audio, try the other ways.
+            audioTimeoutHandler.postDelayed({
+                if (!running || role != ROLE_GATEWAY) return@postDelayed
+                val now = getSystemService(AudioManager::class.java)?.let(::gatewayRoute)
+                if (now == route) { Hub.log("Gateway audio route: now $route"); gatewayAudioStatus() }
+                else gatewaySetAudioRoute(route, requestId, allowDialerAction = false)
+            }, 900L)
+            gatewayAudioStatus()
+            return
+        }
         try {
-            Hub.log("Gateway audio route requested: $route; mode=${audio.mode}")
+            Hub.log("Gateway audio route requested: $route; mode=${audio.mode}, current=$current")
             val accepted = if (Build.VERSION.SDK_INT >= 31) {
                 val type = if (route == "SPEAKER") AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
                 val target = audio.availableCommunicationDevices.firstOrNull { it.type == type }
@@ -297,9 +326,11 @@ class LinkService : Service() {
                 true
             }
             val actual = gatewayRoute(audio)
-            val fallback = if ((!accepted || actual != route) && callState != CALL_IDLE)
-                WhatsappCallAccessibilityService.instance?.requestSpeakerRoute(route) == true
-            else false
+            val fallback = if ((!accepted || actual != route) && callState != CALL_IDLE) {
+                val helper = WhatsappCallAccessibilityService.instance
+                if (helper == null) Hub.log("Speaker fallback unavailable: turn on PCL's accessibility helper on the Gateway")
+                helper?.requestSpeakerRoute(route, when (current) { "SPEAKER" -> true; "EARPIECE" -> false; else -> null }) == true
+            } else false
             val verifiedRoute = gatewayRoute(audio)
             val outcome = when {
                 verifiedRoute == route -> "APPLIED"

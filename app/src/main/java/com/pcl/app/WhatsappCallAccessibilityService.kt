@@ -56,9 +56,13 @@ class WhatsappCallAccessibilityService : AccessibilityService() {
     }
 
     /** A request only acts on a visible, recognized dialer speaker control. */
-    fun requestSpeakerRoute(route: String): Boolean {
+    /** The Gateway's route when the request was made: true = loudspeaker, null = unknown. */
+    @Volatile private var speakerWasOn: Boolean? = null
+
+    fun requestSpeakerRoute(route: String, currentlySpeaker: Boolean? = null): Boolean {
         if (route !in setOf("SPEAKER", "EARPIECE") || instance !== this) return false
         speakerHandler.post {
+            speakerWasOn = currentlySpeaker
             speakerRequest = route
             speakerDeadline = SystemClock.elapsedRealtime() + 3_000L
             speakerHandler.removeCallbacks(expireSpeakerRequest)
@@ -78,10 +82,13 @@ class WhatsappCallAccessibilityService : AccessibilityService() {
             return false
         }
         val pkg = root.packageName?.toString().orEmpty()
-        if (pkg !in setOf("com.google.android.dialer", "com.android.dialer")) return false
+        // Any phone app's in-call screen (Google, AOSP, Samsung, Huawei/Honor incallui, …).
+        val dialer = try { getSystemService(android.telecom.TelecomManager::class.java)?.defaultDialerPackage } catch (_: Exception) { null }
+        if (pkg != dialer && !pkg.contains("incallui") && !pkg.contains("dialer") &&
+            pkg !in setOf("com.android.phone", "com.android.server.telecom")) return false
         val target = findNode(root) { node ->
             val label = labelOf(node).trim().lowercase()
-            label in setOf("speaker", "speakerphone", "turn on speaker", "turn off speaker") &&
+            label.length <= 40 && WhatsAppCalls.isSpeaker(label) &&
                 (node.isClickable || clickableAncestor(node) != null)
         } ?: return false
 
@@ -97,7 +104,8 @@ class WhatsappCallAccessibilityService : AccessibilityService() {
             checkedNode != null -> checkedNode.isChecked
             label == "turn on speaker" -> false
             label == "turn off speaker" -> true
-            else -> return false
+            // No state on the button: use the route the Gateway measured.
+            else -> speakerWasOn ?: return false
         }
         if (knownState == (route == "SPEAKER")) {
             speakerRequest = null

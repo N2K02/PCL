@@ -55,7 +55,19 @@ object WhatsAppCalls {
         "позвонить", "呼叫", "拨打", "撥打", "発信"
     )
 
+    /**
+     * The loudspeaker button of the Phone app (notification action or in-call screen). Pressing
+     * it toggles between loudspeaker and earpiece.
+     */
+    val SPEAKER_LABELS = listOf(
+        "speaker", "loudspeaker", "hands-free", "handsfree", "haut-parleur", "altavoz",
+        "altoparlante", "vivavoce", "lautsprecher", "alto-falante", "viva-voz", "динамик",
+        "громкая", "hoparlör", "扬声器", "免提", "擴音", "スピーカー"
+    )
+
     fun isWhatsApp(pkg: String?): Boolean = pkg in PACKAGES
+
+    fun isSpeaker(label: String): Boolean = containsAny(label, SPEAKER_LABELS)
 
     fun isVoiceCallButton(label: String): Boolean =
         containsAny(label, VOICE_CALL_LABELS) && !containsAny(label, VIDEO_WORDS)
