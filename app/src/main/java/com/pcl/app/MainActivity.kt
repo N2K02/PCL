@@ -255,10 +255,15 @@ class MainActivity : ComponentActivity() {
             topBar = {
                 TopAppBar(
                     title = {
-                        Column {
-                            Text("PCL", fontWeight = FontWeight.Bold)
-                            Text("Bluetooth Call Relay", style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        when (screen) {
+                            MainTab.UPDATE -> dev.n2k02.updater.N2K02UpdateTitle()
+                            MainTab.SETTINGS -> Text("Settings", fontWeight = FontWeight.Bold)
+                            MainTab.CALLS -> Text("Calls", fontWeight = FontWeight.Bold)
+                            else -> Column {
+                                Text("PCL", fontWeight = FontWeight.Bold)
+                                Text("Bluetooth Call Relay", style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     },
                     actions = {
@@ -538,7 +543,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (screen == MainTab.UPDATE) {
-                    dev.n2k02.updater.N2K02UpdateTitle()
                     val experimentalEnabled = LiveUpdater.experimentalEnabled.collectAsState().value
                     dev.n2k02.updater.N2K02UpdateScreen(
                         controller = LiveUpdater.controller,
