@@ -285,7 +285,7 @@ class MainActivity : ComponentActivity() {
                             label = { Text("Calls") }
                         )
                     }
-                    NavigationBarItem(selected = screen == MainTab.UPDATE, onClick = { screen = MainTab.UPDATE }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Download, "Update") } }, label = { Text("Update") })
+                    NavigationBarItem(selected = screen == MainTab.UPDATE, onClick = { screen = MainTab.UPDATE }, icon = { Icon(Icons.Default.Download, "Update") }, label = { Text("Update") })
                     NavigationBarItem(selected = screen == MainTab.SETTINGS, onClick = { screen = MainTab.SETTINGS }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
                 }
             }
