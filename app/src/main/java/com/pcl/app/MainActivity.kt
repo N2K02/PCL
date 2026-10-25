@@ -557,7 +557,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (screen == MainTab.UPDATE) {
-                    dev.n2k02.updater.N2K02UpdateTitle()
                     val experimentalEnabled = LiveUpdater.experimentalEnabled.collectAsState().value
                     dev.n2k02.updater.N2K02UpdateScreen(
                         controller = LiveUpdater.controller,
