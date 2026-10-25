@@ -141,6 +141,25 @@ object CallHistory {
         lastDialAt = System.currentTimeMillis()
     }
 
+    /**
+     * The Bluetooth link is gone, so we cannot know how the in-flight SIM call ended.
+     * Drop only the transient call tracker (never stored Recents) rather than folding
+     * a subsequent, unrelated call into the old session or recording a fake missed call.
+     */
+    @Synchronized
+    fun onLinkLost() {
+        lastState = LinkService.CALL_IDLE
+        ringingNumber = ""
+        ringingName = ""
+        startedAt = 0L
+        answered = false
+        declinedHere = false
+        connectedSince = 0L
+        lastDialNumber = ""
+        lastDialName = ""
+        lastDialAt = 0L
+    }
+
     /** The Remote declined a ringing call, so its end is "declined", not "missed". */
     @Synchronized
     fun onDeclinedHere() {

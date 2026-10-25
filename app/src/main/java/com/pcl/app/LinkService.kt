@@ -956,7 +956,11 @@ class LinkService : Service() {
                 if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
                 if (whatsappCallStatus?.startsWith("PENDING:") == true) whatsappCallStatus = "FAILED: Connection lost before the Gateway answered."
                 stopRinging()
+                CallHistory.onLinkLost()
                 callState = CALL_IDLE
+                callNumber = ""
+                callName = ""
+                callDirection = ""
                 nm.cancel(ID_INCOMING)
                 // Mirrored calls can't be answered or ended without the link; the Gateway
                 // sends the ones still going again when it reconnects.
@@ -1003,7 +1007,11 @@ class LinkService : Service() {
         nm.cancel(ID_INCOMING)
         stopForeground(STOP_FOREGROUND_REMOVE)
         connectionState = "Stopped"
+        if (role == ROLE_REMOTE) CallHistory.onLinkLost()
         callState = CALL_IDLE
+        callNumber = ""
+        callName = ""
+        callDirection = ""
         Hub.log("Stopped")
     }
 
