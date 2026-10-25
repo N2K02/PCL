@@ -16,6 +16,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.clickable
 import dev.n2k02.updater.hasPendingUpdate
@@ -240,6 +241,11 @@ class MainActivity : ComponentActivity() {
                 (role != LinkService.ROLE_GATEWAY || notificationAccess)
         }
         var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
+        var showingPermissions by remember { mutableStateOf(false) }
+        BackHandler(enabled = showingPermissions && screen == MainTab.SETTINGS) { showingPermissions = false }
+        BackHandler(enabled = screen == MainTab.UPDATE || screen == MainTab.CALLS) {
+            screen = if (screen == MainTab.UPDATE) MainTab.SETTINGS else MainTab.HOME
+        }
         val updateStatus by LiveUpdater.controller.status.collectAsState()
         val unseenMissed by CallHistory.unseenMissed.collectAsState()
         // Calls is the Remote's tab; a notification may ask for it.
@@ -262,7 +268,7 @@ class MainActivity : ComponentActivity() {
                                     MainTab.HOME -> Icons.Default.Hub
                                     MainTab.CALLS -> Icons.Default.Call
                                     MainTab.UPDATE -> Icons.Default.Download
-                                    MainTab.SETTINGS -> Icons.Default.Settings
+                                    MainTab.SETTINGS -> if (showingPermissions) Icons.Default.CheckCircle else Icons.Default.Settings
                                 },
                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier.size(24.dp),
@@ -271,7 +277,7 @@ class MainActivity : ComponentActivity() {
                                 MainTab.HOME -> "Home"
                                 MainTab.CALLS -> "Calls"
                                 MainTab.UPDATE -> "About & updates"
-                                MainTab.SETTINGS -> "Settings"
+                                MainTab.SETTINGS -> if (showingPermissions) "Permissions" else "Settings"
                             }, fontWeight = FontWeight.SemiBold, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
                         }
@@ -290,22 +296,8 @@ class MainActivity : ComponentActivity() {
             },
             bottomBar = {
                 NavigationBar {
-                    NavigationBarItem(selected = screen == MainTab.HOME, enabled = setupReady, onClick = { if (setupReady) screen = MainTab.HOME }, icon = { Icon(Icons.Default.Hub, null) }, label = { Text("Home") })
-                    if (remote) {
-                        NavigationBarItem(
-                            selected = screen == MainTab.CALLS,
-                            enabled = setupReady,
-                            onClick = { if (setupReady) screen = MainTab.CALLS },
-                            icon = {
-                                BadgedBox(badge = { if (unseenMissed > 0) Badge { Text("$unseenMissed") } }) {
-                                    Icon(Icons.Default.Call, null)
-                                }
-                            },
-                            label = { Text("Calls") }
-                        )
-                    }
-                    NavigationBarItem(selected = screen == MainTab.UPDATE, onClick = { screen = MainTab.UPDATE }, icon = { Icon(Icons.Default.Download, "Update") }, label = { Text("Update") })
-                    NavigationBarItem(selected = screen == MainTab.SETTINGS, onClick = { screen = MainTab.SETTINGS }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
+                    NavigationBarItem(selected = screen == MainTab.HOME, onClick = { screen = MainTab.HOME; showingPermissions = false }, icon = { Icon(Icons.Default.Hub, null) }, label = { Text("Home") })
+                    NavigationBarItem(selected = screen != MainTab.HOME, onClick = { screen = MainTab.SETTINGS; showingPermissions = false }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
                 }
             }
         ) { insets ->
@@ -473,15 +465,32 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (screen == MainTab.SETTINGS) {
-                    androidx.compose.material3.ListItem(
+                if (screen == MainTab.SETTINGS && !showingPermissions) {
+                    ListItem(
+                        headlineContent = { Text("Permissions") },
+                        supportingContent = { Text("Device role, required access, notification sync and setup") },
+                        leadingContent = { Icon(Icons.Default.CheckCircle, null) },
+                        modifier = Modifier.clickable { showingPermissions = true },
+                    )
+                    if (remote) {
+                        ListItem(
+                            headlineContent = { Text("Calls") },
+                            supportingContent = { Text("Keypad, recents and synced contacts") },
+                            leadingContent = { Icon(Icons.Default.Call, null) },
+                            trailingContent = { if (unseenMissed > 0) Badge { Text("$unseenMissed") } },
+                            modifier = Modifier.clickable { if (setupReady) screen = MainTab.CALLS },
+                        )
+                    }
+                    ListItem(
                         headlineContent = { Text("About & updates") },
                         supportingContent = { Text(if (updateStatus.hasPendingUpdate()) "A new update is available" else "App version and update checks") },
                         leadingContent = { Icon(Icons.Default.Download, null) },
                         trailingContent = { dev.n2k02.updater.N2K02UpdateBadge(updateStatus) },
                         modifier = Modifier.clickable { screen = MainTab.UPDATE },
                     )
-                    Text("Setup & settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
+                }
+                if (screen == MainTab.SETTINGS && showingPermissions) {
+                    Text("Device role & permissions", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
                     Text("Choose a role and grant every required permission. Home unlocks when setup is complete.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                         RoleChoiceCard("Gateway", "SIM phone and call controller", Icons.Default.Radio, roleSelected && role == LinkService.ROLE_GATEWAY, Modifier.weight(1f)) {
@@ -565,7 +574,7 @@ class MainActivity : ComponentActivity() {
                         onExperimentalEnabledChange = LiveUpdater::setExperimentalEnabled,
                     )
                 }
-                if (screen == MainTab.SETTINGS) {
+                if (screen == MainTab.SETTINGS && showingPermissions) {
                     SectionCard(title = "Permissions", subtitle = if (roleSelected) "Required access for the selected phone role." else "Select a role above to see its setup checklist.") {
                         if (roleSelected && role == LinkService.ROLE_GATEWAY) {
                             if (Build.VERSION.SDK_INT >= 33) PermissionSetupRow("Notifications", "Show the ongoing PCL status", granted(Manifest.permission.POST_NOTIFICATIONS)) { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1) }
