@@ -283,9 +283,6 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     actions = {
-                        FilledTonalIconButton(onClick = { quitApp() }) {
-                            Icon(Icons.Default.PowerSettingsNew, contentDescription = "Quit")
-                        }
                         dev.n2k02.updater.N2K02AppIcon(Modifier.size(28.dp))
                         Text("PCL", fontWeight = FontWeight.SemiBold,
                             style = MaterialTheme.typography.titleMedium,
@@ -298,6 +295,13 @@ class MainActivity : ComponentActivity() {
                 NavigationBar {
                     NavigationBarItem(selected = screen == MainTab.HOME, onClick = { screen = MainTab.HOME; showingPermissions = false }, icon = { Icon(Icons.Default.Hub, null) }, label = { Text("Home") })
                     NavigationBarItem(selected = screen != MainTab.HOME, onClick = { screen = MainTab.SETTINGS; showingPermissions = false }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
+                    NavigationBarItem(
+                        selected = false,
+                        onClick = { quitApp() },
+                        icon = { Icon(Icons.Default.PowerSettingsNew, contentDescription = "Quit") },
+                        label = { Text("Quit") },
+                        alwaysShowLabel = true,
+                    )
                 }
             }
         ) { insets ->
