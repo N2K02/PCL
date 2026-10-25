@@ -16,7 +16,9 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import dev.n2k02.updater.hasPendingUpdate
 import androidx.compose.foundation.background
@@ -30,6 +32,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.ContentCopy
@@ -50,12 +54,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-
-private enum class MainTab { HOME, CALLS, UPDATE, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
@@ -239,7 +242,7 @@ class MainActivity : ComponentActivity() {
             roleSelected && required.distinct().all { granted(it) } &&
                 (role != LinkService.ROLE_GATEWAY || notificationAccess)
         }
-        var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
+        var screen by remember { mutableStateOf(initialTab(setupReady)) }
         val updateStatus by LiveUpdater.controller.status.collectAsState()
         val unseenMissed by CallHistory.unseenMissed.collectAsState()
         // Calls is the Remote's tab; a notification may ask for it.
@@ -250,18 +253,18 @@ class MainActivity : ComponentActivity() {
             }
         }
         LaunchedEffect(remote) { if (!remote && screen == MainTab.CALLS) screen = MainTab.HOME }
+        // Keep subpages inside Settings without adding a second toolbar or back arrow.
+        BackHandler(enabled = screen == MainTab.PERMISSIONS || screen == MainTab.UPDATE) { screen = MainTab.SETTINGS }
 
         Scaffold(
             topBar = {
                 TopAppBar(
                     title = {
-                        when (screen) {
-                            MainTab.UPDATE -> dev.n2k02.updater.N2K02UpdateTitle()
-                            MainTab.SETTINGS -> Text("Settings", fontWeight = FontWeight.Bold)
-                            MainTab.CALLS -> Text("Calls", fontWeight = FontWeight.Bold)
-                            else -> Column {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Image(painter = painterResource(R.drawable.ic_pcl), contentDescription = null, modifier = Modifier.size(36.dp))
+                            Column {
                                 Text("PCL", fontWeight = FontWeight.Bold)
-                                Text("Bluetooth Call Relay", style = MaterialTheme.typography.labelMedium,
+                                Text(screen.pageTitle, style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
@@ -290,8 +293,7 @@ class MainActivity : ComponentActivity() {
                             label = { Text("Calls") }
                         )
                     }
-                    NavigationBarItem(selected = screen == MainTab.UPDATE, onClick = { screen = MainTab.UPDATE }, icon = { Icon(Icons.Default.Download, "Update") }, label = { Text("Update") })
-                    NavigationBarItem(selected = screen == MainTab.SETTINGS, onClick = { screen = MainTab.SETTINGS }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
+                    NavigationBarItem(selected = screen.primaryTab == MainTab.SETTINGS, onClick = { screen = MainTab.SETTINGS }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
                 }
             }
         ) { insets ->
@@ -461,14 +463,28 @@ class MainActivity : ComponentActivity() {
 
                 if (screen == MainTab.SETTINGS) {
                     androidx.compose.material3.ListItem(
+                        headlineContent = { Text("Permissions") },
+                        supportingContent = { Text(when {
+                            !roleSelected -> "Select a phone role and configure its access"
+                            setupReady -> "All required permissions are ready"
+                            else -> "Complete required setup to unlock Home"
+                        }) },
+                        leadingContent = { Icon(Icons.Default.Security, null) },
+                        trailingContent = { Icon(Icons.Default.ChevronRight, null) },
+                        modifier = Modifier.clickable { screen = MainTab.PERMISSIONS },
+                    )
+                    androidx.compose.material3.ListItem(
                         headlineContent = { Text("About & updates") },
                         supportingContent = { Text(if (updateStatus.hasPendingUpdate()) "A new update is available" else "App version and update checks") },
                         leadingContent = { Icon(Icons.Default.Download, null) },
                         trailingContent = { dev.n2k02.updater.N2K02UpdateBadge(updateStatus) },
                         modifier = Modifier.clickable { screen = MainTab.UPDATE },
                     )
-                    Text("Setup & settings", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                    Text("Choose a role and grant every required permission. Home unlocks when setup is complete.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+
+                if (screen == MainTab.PERMISSIONS) {
+                    Text("Choose a role and grant every required permission. Home unlocks when setup is complete.",
+                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
                         RoleChoiceCard("Gateway", "SIM phone and call controller", Icons.Default.Radio, roleSelected && role == LinkService.ROLE_GATEWAY, Modifier.weight(1f)) {
                             if (!running) { role = LinkService.ROLE_GATEWAY; roleSelected = true; prefs.edit().putString(Prefs.ROLE, role).apply(); refresh() }
@@ -478,7 +494,6 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 }
-
 
                 if (screen == MainTab.HOME && setupReady && running) {
                     SectionCard(title = "Phone call", subtitle = if (remote) "Gateway SIM call status and controls" else "This phone’s SIM call status and controls") {
@@ -538,8 +553,8 @@ class MainActivity : ComponentActivity() {
                 if (screen == MainTab.HOME && setupReady) ActivityLogCard()
                 if (screen == MainTab.HOME && !setupReady) {
                     Text("Complete setup first", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                    SectionCard(title = "Home locked", subtitle = "Grant the required permissions in Settings to enable the connection controls.") {
-                        Button(onClick = { screen = MainTab.SETTINGS }, modifier = Modifier.fillMaxWidth()) { Text("Open Settings") }
+                    SectionCard(title = "Home locked", subtitle = "Grant the required permissions in Settings → Permissions to enable the connection controls.") {
+                        Button(onClick = { screen = MainTab.PERMISSIONS }, modifier = Modifier.fillMaxWidth()) { Text("Open Permissions") }
                     }
                 }
                 if (screen == MainTab.UPDATE) {
@@ -551,7 +566,7 @@ class MainActivity : ComponentActivity() {
                         onExperimentalEnabledChange = LiveUpdater::setExperimentalEnabled,
                     )
                 }
-                if (screen == MainTab.SETTINGS) {
+                if (screen == MainTab.PERMISSIONS) {
                     SectionCard(title = "Permissions", subtitle = if (roleSelected) "Required access for the selected phone role." else "Select a role above to see its setup checklist.") {
                         if (roleSelected && role == LinkService.ROLE_GATEWAY) {
                             if (Build.VERSION.SDK_INT >= 33) PermissionSetupRow("Notifications", "Show the ongoing PCL status", granted(Manifest.permission.POST_NOTIFICATIONS)) { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1) }
@@ -602,10 +617,10 @@ class MainActivity : ComponentActivity() {
                         HorizontalDivider()
                         Text("Privacy", style = MaterialTheme.typography.titleMedium)
                         Text("PCL uses permissions for the selected phone role. Grant only the access needed for the features you want to use.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedButton(onClick = { roleSelected = false; prefs.edit().remove(Prefs.ROLE).apply(); screen = MainTab.SETTINGS; refresh() }, modifier = Modifier.fillMaxWidth()) { Text("Reset device role") }
+                        OutlinedButton(onClick = { roleSelected = false; prefs.edit().remove(Prefs.ROLE).apply(); screen = MainTab.PERMISSIONS; refresh() }, modifier = Modifier.fillMaxWidth()) { Text("Reset device role") }
                     }
                     
-                if (roleSelected && role == LinkService.ROLE_GATEWAY) {
+                if (screen == MainTab.PERMISSIONS && roleSelected && role == LinkService.ROLE_GATEWAY) {
                     SectionCard(title = "Notification sync", subtitle = "Calls sync automatically. Other notifications are optional.") {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
