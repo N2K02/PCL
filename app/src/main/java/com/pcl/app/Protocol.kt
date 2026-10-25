@@ -25,8 +25,9 @@ object Protocol {
      *  - 3: HELLO carries versions; Gateway reports hotspot status (HOTSPOT_STATE)
      *  - 4: the Remote can ask the Gateway to start a WhatsApp call (WHATSAPP_CALL)
      *  - 5: the Wi-Fi hotspot workaround is gone (no HOTSPOT_STATE, no WHATSAPP_CALL_TRIGGER)
+     *  - 7: the Gateway sends CALL_LOGGED (number or "withheld" from its call log) after a SIM call
      */
-    const val VERSION = 6
+    const val VERSION = 7
 }
 
 /**
@@ -45,7 +46,7 @@ object Commands {
 
     /** Sent by the Gateway; handled only on the Remote. */
     val REMOTE_HANDLES = setOf(
-        "CALL", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
+        "CALL", "CALL_LOGGED", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
         "CONTACTS_RESULT", "NOTIF", "NOTIF_V2", "CALL_NOTIF", "NOTIF_REMOVE", "NOTIF_CLEAR_ORDINARY",
         "WHATSAPP_CHAT_RESULT", "WHATSAPP_CALL_RESULT", "NOTIF_ACTION_RESULT", "AUDIO_STATUS"
     )

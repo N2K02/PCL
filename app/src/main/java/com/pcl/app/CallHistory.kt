@@ -95,8 +95,49 @@ object CallHistory {
         val list = (listOf(record) + _records.value).take(MAX)
         _records.value = list
         save(list)
+        if (!record.whatsapp) lastSimAddedAt = SystemClock.elapsedRealtime()
         if (record.type == Type.MISSED) setUnseen(_unseenMissed.value + 1)
     }
+
+    /** When the latest SIM call was added (elapsedRealtime), so the Gateway's call log can correct it. */
+    private var lastSimAddedAt = 0L
+
+    /**
+     * The Gateway read the SIM call that just ended from its call log. Fills in or corrects the
+     * newest SIM entry, if it was added in the last [AMEND_WINDOW_MS].
+     */
+    @Synchronized
+    fun amendSim(startedMs: Long, number: String, name: String, withheld: Boolean): Record? {
+        if (!loaded || lastSimAddedAt == 0L ||
+            SystemClock.elapsedRealtime() - lastSimAddedAt > AMEND_WINDOW_MS) return null
+        val list = _records.value
+        val index = list.indexOfFirst { !it.whatsapp }
+        if (index < 0) return null
+        val old = list[index]
+        val updated = amended(old, number, name, withheld) ?: return null
+        val copy = list.toMutableList().also { it[index] = updated }
+        _records.value = copy
+        save(copy)
+        return updated
+    }
+
+    /** [old] with the call log's details applied, or null when nothing changes. Pure, for tests. */
+    fun amended(old: Record, number: String, name: String, withheld: Boolean): Record? {
+        val updated = when {
+            withheld && old.number.isEmpty() -> old.copy(name = CallerId.PRIVATE)
+            withheld -> null
+            number.isEmpty() -> null
+            // Never overwrite a different number the Remote already knew (another call).
+            old.number.isNotEmpty() && !CallerId.sameNumber(old.number, number) -> null
+            else -> old.copy(
+                number = old.number.ifEmpty { number },
+                name = if (old.name.isEmpty() || old.name == CallerId.PRIVATE) name else old.name,
+            )
+        }
+        return updated?.takeIf { it != old }
+    }
+
+    private const val AMEND_WINDOW_MS = 30_000L
 
     private fun save(list: List<Record>) {
         try {

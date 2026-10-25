@@ -138,7 +138,8 @@ class MainActivity : ComponentActivity() {
     private fun granted(p: String) = checkSelfPermission(p) == PackageManager.PERMISSION_GRANTED
 
     private fun requestMissingPermissions() {
-        val needed = corePerms() + if (role == LinkService.ROLE_GATEWAY) gatewayPerms() else emptyList()
+        // Call log is optional (Start works without it) but needed for caller numbers, so ask for it too.
+        val needed = corePerms() + if (role == LinkService.ROLE_GATEWAY) gatewayPerms() + Manifest.permission.READ_CALL_LOG else emptyList()
         val missing = needed.distinct().filterNot { granted(it) }
         if (missing.isNotEmpty()) requestPermissions(missing.toTypedArray(), 1) else refresh()
     }
@@ -596,6 +597,7 @@ class MainActivity : ComponentActivity() {
                             PermissionSetupRow("Answer calls", "Allow call answering requests", granted(Manifest.permission.ANSWER_PHONE_CALLS)) { requestPermissions(arrayOf(Manifest.permission.ANSWER_PHONE_CALLS), 1) }
                             PermissionSetupRow("Place calls", "Place calls through the gateway SIM", granted(Manifest.permission.CALL_PHONE)) { requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 1) }
                             PermissionSetupRow("Contacts (for sync)", "Send Gateway contacts to the Remote and resolve caller names", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
+                            PermissionSetupRow("Call log (caller numbers)", "Android only gives the caller's number, or tells a private number apart, with this", granted(Manifest.permission.READ_CALL_LOG)) { requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 1) }
                             PermissionSetupRow("Notification access", "Send notifications and WhatsApp calls to the Remote", notificationAccess, actionLabel = "Open settings") { runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }.onFailure { toast("Open Android Settings → Notifications → Notification access") } }
                             val callHelperEnabled = WhatsappCallAccessibilityService.isEnabled(this@MainActivity)
                             PermissionSetupRow("WhatsApp calls (optional)", "Accessibility service \"PCL WhatsApp call helper\": lets PCL start the WhatsApp calls the Remote asks for", callHelperEnabled, actionLabel = "Open settings") {

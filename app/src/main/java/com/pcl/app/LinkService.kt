@@ -1060,22 +1060,33 @@ class LinkService : Service() {
                 val previousState = callState
                 callState = arg1.ifEmpty { CALL_IDLE }
                 if (callState == CALL_RINGING) callControlError = null
-                callNumber = p.getOrElse(2) { "" }.trim()
-                val receivedName = p.getOrElse(3) { "" }.trim()
-                // Generic dialer placeholders are not contact names. When the
-                // Gateway supplied a number, display that number on the Remote.
-                callName = receivedName.takeUnless {
-                    it.equals("Unknown number", ignoreCase = true) ||
-                        it.equals("Unknown", ignoreCase = true) ||
-                        it.equals("Incoming call", ignoreCase = true) ||
-                        it.equals("Private number", ignoreCase = true) ||
-                        it.equals("No caller ID", ignoreCase = true)
-                }.orEmpty()
+                callNumber = CallerId.asNumber(p.getOrElse(2) { "" }).ifEmpty { CallerId.clean(p.getOrElse(2) { "" }) }
+                val receivedName = p.getOrElse(3) { "" }
+                // Generic dialer placeholders are not contact names. A withheld number is
+                // shown as "Private number"; otherwise the number is shown.
+                callName = when {
+                    callNumber.isEmpty() && CallerId.isPrivate(receivedName) -> CallerId.PRIVATE
+                    else -> CallerId.asName(receivedName)
+                }
+                // The Gateway had no name: try the contacts synced from it.
+                if (callName.isEmpty() && callNumber.isNotEmpty()) {
+                    callName = ContactStore.all(this).firstOrNull { CallerId.sameNumber(it.number, callNumber) }?.name.orEmpty()
+                }
                 callDirection = p.getOrElse(4) { "" }
                 CallHistory.onSimState(callState, callNumber, callName)
                     ?.takeIf { it.type == CallHistory.Type.MISSED }
                     ?.let(::showMissedCall)
                 onRemoteCallUpdate(previousState)
+            }
+            "CALL_LOGGED" -> {
+                // The Gateway's call log for a SIM call that just ended: corrects Recents.
+                val started = arg1.toLongOrNull() ?: 0L
+                val number = CallerId.asNumber(p.getOrElse(2) { "" })
+                val name = CallerId.asName(p.getOrElse(3) { "" })
+                val withheld = p.getOrElse(4) { "0" } == "1"
+                CallHistory.amendSim(started, number, name, withheld)
+                    ?.takeIf { it.type == CallHistory.Type.MISSED }
+                    ?.let(::showMissedCall)
             }
             // remote -> gateway
             "ANSWER" -> { gatewayAnswer(); sendCallResult() }
@@ -1239,21 +1250,32 @@ class LinkService : Service() {
     private val phoneReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             val st = i.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
+            // Android 9+ only includes the number for apps holding READ_CALL_LOG. Android 10+
+            // sends the broadcast twice: with the number (key present, "" when withheld) to
+            // call-log holders, and without the key to everyone else.
             @Suppress("DEPRECATION")
-            val num = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
+            val hasNumberExtra = i.hasExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
+            @Suppress("DEPRECATION")
+            val num = CallerId.clean(i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER))
             val previousState = callState
             val newState = when (st) {
                 TelephonyManager.EXTRA_STATE_RINGING -> CALL_RINGING
                 TelephonyManager.EXTRA_STATE_OFFHOOK -> CALL_OFFHOOK
                 else -> CALL_IDLE
             }
+            val callStartedMs = simCallStartedMs
             if (newState == CALL_RINGING && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "INCOMING"; callNumber = ""; callName = "" }
             else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "OUTGOING" }
             else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
-            val gotNumber = !num.isNullOrEmpty() && num != callNumber
-            if (!num.isNullOrEmpty()) {
+            var gotNumber = num.isNotEmpty() && num != callNumber
+            if (num.isNotEmpty()) {
                 callNumber = num
                 callName = lookupName(num)
+            } else if (hasNumberExtra && newState == CALL_RINGING && callNumber.isEmpty() &&
+                callName.isEmpty() && has(Manifest.permission.READ_CALL_LOG)) {
+                // Call-log holders get an empty number only when the caller withheld it.
+                callName = CallerId.PRIVATE
+                gotNumber = true
             }
             val changed = newState != callState
             if (changed && newState == CALL_RINGING) callControlError = null
@@ -1262,7 +1284,13 @@ class LinkService : Service() {
                 Hub.log("Phone call: $newState (${logCaller()})")
                 sendCallState()
             }
+            // The Phone app's notification may have been posted before this broadcast and
+            // ignored then; read it again now that a call is known.
+            if (changed && newState != CALL_IDLE && callNumber.isEmpty()) {
+                rescanDialerLater()
+            }
             if (newState == CALL_IDLE) {
+                if (changed && callStartedMs > 0L) reportLoggedCallLater(callStartedMs)
                 callNumber = ""
                 callName = ""
             }
@@ -1277,6 +1305,9 @@ class LinkService : Service() {
             if (Build.VERSION.SDK_INT >= 33) registerReceiver(phoneReceiver, f, Context.RECEIVER_EXPORTED)
             else registerReceiver(phoneReceiver, f)
             receiverRegistered = true
+            if (!has(Manifest.permission.READ_CALL_LOG)) {
+                Hub.log("Call log permission missing: Android won't give PCL the caller's number. Grant it in Settings → Permissions.")
+            }
             // Some devices do not redeliver the current phone state on registration.
             syncCurrentPhoneState()
         } catch (e: SecurityException) {
@@ -1309,39 +1340,44 @@ class LinkService : Service() {
         }
     }
 
-    /** Gateway: enrich an active SIM call using metadata from the default dialer's notification. */
-    private fun numbersMatch(first: String, second: String): Boolean {
-        val a = ContactStore.digits(first)
-        val b = ContactStore.digits(second)
-        return a.isNotBlank() && b.isNotBlank() &&
-            (a == b || (a.length >= 10 && b.length >= 10 &&
-                (a.endsWith(b) || b.endsWith(a))))
-    }
-
-    fun updateCallerFromNotification(number: String, name: String) {
+    /**
+     * Gateway: enrich the current SIM call with what the default Phone app's notification shows.
+     * [number] and [name] are raw labels; [privateCaller] is true when it says the number is withheld.
+     */
+    fun updateCallerFromNotification(number: String, name: String, privateCaller: Boolean = false) {
         if (role != ROLE_GATEWAY || callState == CALL_IDLE) return
-        val safeNumber = number.trim().take(80)
-        val safeName = name.trim().take(120)
-        if (safeNumber.isEmpty() && safeName.isEmpty()) return
+        val safeNumber = CallerId.asNumber(number).take(80)
+        val safeName = CallerId.asName(name).take(120)
+        if (safeNumber.isEmpty() && safeName.isEmpty()) {
+            if (privateCaller && callNumber.isEmpty() && callName.isEmpty()) {
+                callName = CallerId.PRIVATE
+                Hub.log("Caller withheld their number")
+                sendCallState()
+                Hub.notifyUi()
+            }
+            return
+        }
         if (safeNumber.isNotEmpty() && callNumber.isNotEmpty() &&
-            !numbersMatch(callNumber, safeNumber)) return
+            !CallerId.sameNumber(callNumber, safeNumber)) return
         var changed = false
         if (callNumber.isEmpty() && safeNumber.isNotEmpty()) {
             callNumber = safeNumber
+            if (callName == CallerId.PRIVATE) callName = ""
+            if (callName.isEmpty()) callName = lookupName(safeNumber)
             changed = true
         }
-        if (callName.isEmpty() && safeName.isNotEmpty() &&
-            safeName.lowercase() !in setOf("unknown", "unknown number", "incoming call",
-                "ongoing call", "phone", "private number", "no caller id")) {
+        if ((callName.isEmpty() || callName == CallerId.PRIVATE) && safeName.isNotEmpty()) {
             callName = safeName
             changed = true
         }
-        if (callNumber.isEmpty() && callName.isNotBlank()) {
+        if (callNumber.isEmpty() && callName.isNotBlank() && callName != CallerId.PRIVATE) {
             val matched = resolveUniqueContactNumber(callName)
             if (matched.isNotBlank()) {
                 callNumber = matched
                 changed = true
-                Hub.log("Caller number inferred from a unique contact match")
+                Hub.log("Caller number found from the contact name")
+            } else {
+                Hub.log("Caller name has no single matching contact number")
             }
         }
         if (changed) {
@@ -1351,30 +1387,71 @@ class LinkService : Service() {
         }
     }
 
-    /**
-     * Resolve a caller label from the default dialer's notification.
-     * Prefer an exact full-name match, then a uniquely matching normalized label.
-     * Never infer a number from a partial name or an ambiguous set of contacts.
-     */
+    /** The number of the one Gateway contact called [name], or "" when none or ambiguous. */
     private fun resolveUniqueContactNumber(name: String): String {
         if (name.isBlank() || !has(Manifest.permission.READ_CONTACTS)) return ""
-        fun normalize(value: String): String = java.text.Normalizer
-            .normalize(value, java.text.Normalizer.Form.NFKC)
-            .trim().replace(Regex("\\s+"), " ")
-            .lowercase(java.util.Locale.ROOT)
-        val target = normalize(name)
-        if (target.length < 2 || target in setOf("unknown", "unknown number",
-                "private number", "incoming call", "ongoing call", "phone",
-                "restricted", "withheld", "no caller id")) return ""
-        val contacts = ContactStore.readDevice(this)
-        val exact = contacts.filter { it.name.trim().equals(name.trim(), ignoreCase = true) }
-        val matches = if (exact.isNotEmpty()) exact else contacts.filter {
-            normalize(it.name) == target
+        return CallerId.numberForName(name, ContactStore.readDevice(this))
+    }
+
+    /** Gateway: re-reads the Phone app's call notification shortly after a call starts. */
+    private fun rescanDialerLater() {
+        for (delay in longArrayOf(400L, 1_500L, 4_000L)) {
+            trafficHandler.postDelayed({
+                if (role == ROLE_GATEWAY && callState != CALL_IDLE && callNumber.isEmpty()) {
+                    NotifListener.instance?.rescanDialer()
+                }
+            }, delay)
         }
-        val numbers = matches.map { ContactStore.digits(it.number) }
-            .filter { it.isNotBlank() }.distinct()
-        if (numbers.size > 1) Hub.log("Caller label matches multiple contact numbers; leaving number unknown")
-        return if (numbers.size == 1) matches.first().number else ""
+    }
+
+    /**
+     * Gateway: once a SIM call ended, Android writes it to the call log with its real number,
+     * or marks it withheld. That is sent to the Remote to correct its Recents entry.
+     */
+    private fun reportLoggedCallLater(startedMs: Long) {
+        if (!has(Manifest.permission.READ_CALL_LOG)) return
+        val attempts = intArrayOf(0)
+        val task = object : Runnable {
+            override fun run() {
+                val logged = readLoggedCall(startedMs)
+                if (logged == null) {
+                    if (++attempts[0] < 4) trafficHandler.postDelayed(this, 1_500L)
+                    return
+                }
+                val (number, name, withheld) = logged
+                send("CALL_LOGGED", startedMs.toString(), number, name, if (withheld) "1" else "0")
+                Hub.log("Call log: ${if (withheld) "withheld number" else logCaller(number)} sent to the Remote")
+            }
+        }
+        trafficHandler.postDelayed(task, 1_200L)
+    }
+
+    /** The call-log entry of the call that started at [startedMs]: number, cached name, withheld. */
+    @SuppressLint("MissingPermission")
+    private fun readLoggedCall(startedMs: Long): Triple<String, String, Boolean>? = try {
+        contentResolver.query(
+            android.provider.CallLog.Calls.CONTENT_URI,
+            arrayOf(
+                android.provider.CallLog.Calls.NUMBER,
+                android.provider.CallLog.Calls.CACHED_NAME,
+                android.provider.CallLog.Calls.NUMBER_PRESENTATION,
+            ),
+            "${android.provider.CallLog.Calls.DATE} >= ?",
+            arrayOf((startedMs - 10_000L).toString()),
+            "${android.provider.CallLog.Calls.DATE} DESC"
+        )?.use { c ->
+            if (!c.moveToFirst()) null else {
+                val number = CallerId.clean(c.getString(0))
+                val presentation = c.getInt(2)
+                val withheld = presentation == android.provider.CallLog.Calls.PRESENTATION_RESTRICTED ||
+                    (number.isEmpty() && presentation != android.provider.CallLog.Calls.PRESENTATION_ALLOWED)
+                val name = CallerId.asName(c.getString(1)).ifEmpty { if (number.isNotEmpty()) lookupName(number) else "" }
+                Triple(if (withheld) "" else number, name, withheld)
+            }
+        }
+    } catch (e: Exception) {
+        Hub.log("Call log unavailable: ${e.message ?: e.javaClass.simpleName}")
+        null
     }
 
     private fun sendCallState() {
@@ -1868,8 +1945,14 @@ class LinkService : Service() {
     }
 
     /** A synced (or this phone's) contact's number by exact name, or "". */
-    private fun numberForName(name: String): String =
-        if (name.isBlank()) "" else ContactStore.all(this).firstOrNull { it.name.equals(name, ignoreCase = true) }?.number.orEmpty()
+    /** Remote: the number of the contact WhatsApp shows by [name] (synced Gateway contacts first). */
+    private fun numberForName(name: String): String {
+        if (name.isBlank()) return ""
+        val synced = ContactStore.loadSynced(this)
+        return CallerId.numberForName(name, synced)
+            .ifEmpty { CallerId.numberForName(name, ContactStore.readDevice(this)) }
+            .also { if (it.isEmpty()) Hub.log("WhatsApp caller has no single matching contact number (contacts synced: ${synced.size})") }
+    }
 
     // ---------------------------------------------------------------- notifications
 

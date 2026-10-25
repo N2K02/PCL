@@ -242,27 +242,7 @@ class NotifListener : NotificationListenerService() {
             if (sbn.packageName == defaultDialer()) {
                 if (svc.simCallStartedAt() > 0L && sbn.postTime + 5000L < svc.simCallStartedAt()) return
                 synchronized(dialerCallKeys) { dialerCallKeys.add(sbn.key) }
-                val person = callerPerson(ex)
-                val uriNumber = person?.uri?.takeIf { it.startsWith("tel:", ignoreCase = true) }
-                    ?.removePrefix("tel:").orEmpty()
-                // Dialers may put the raw number in the Person name, compat Person,
-                // title or text instead of the Person URI. Do not treat a number as
-                // a contact name, and never forward generic dialer placeholders.
-                val numberPattern = Regex("^\\+?[0-9][0-9() .-]{3,28}[0-9]$")
-                fun phoneNumber(value: String): String =
-                    value.trim().takeIf { numberPattern.matches(it) &&
-                        it.count(Char::isDigit) >= 5 }.orEmpty()
-                val candidate = listOf(uriNumber, person?.name?.toString().orEmpty(),
-                    compatCallerName(ex), title, text)
-                    .firstNotNullOfOrNull { phoneNumber(it).takeIf(String::isNotEmpty) }.orEmpty()
-                val personName = person?.name?.toString().orEmpty()
-                val candidateName = listOf(personName, compatCallerName(ex), title)
-                    .map(String::trim)
-                    .firstOrNull { it.isNotEmpty() && phoneNumber(it).isEmpty() &&
-                        it !in listOf("Incoming call", "Ongoing call", "Phone",
-                            "Unknown", "Unknown number", "Private number", "No caller ID") }
-                    .orEmpty()
-                svc.updateCallerFromNotification(candidate, candidateName)
+                reportDialerCaller(svc, n, ex, title, text)
                 return
             }
             val previousSessionState = synchronized(thirdPartySessions) {
@@ -332,6 +312,45 @@ class NotifListener : NotificationListenerService() {
     fun performAction(key: String, index: Int): Boolean {
         val action = synchronized(actionsByKey) { actionsByKey[key]?.getOrNull(index) } ?: return false
         return dispatchAction(action)
+    }
+
+    /**
+     * Gateway: passes the caller shown in the default Phone app's call notification to the
+     * service. Dialers put the number in the Person URI, the Person name, the title or the text,
+     * often wrapped in invisible direction marks; a contact name goes in the Person name or title.
+     */
+    private fun reportDialerCaller(svc: LinkService, n: Notification, ex: Bundle, title: String, text: String) {
+        val person = callerPerson(ex)
+        val compat = try { ex.getBundle("android.callPersonCompat") } catch (_: Exception) { null }
+        val uris = listOfNotNull(person?.uri, compat?.getString("uri"))
+            .filter { it.startsWith("tel:", ignoreCase = true) }
+            .map { android.net.Uri.decode(it.substring(4)) }
+        val labels = listOf(person?.name?.toString().orEmpty(), compatCallerName(ex), title,
+            ex.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty())
+        val number = (uris + labels + text).firstNotNullOfOrNull { CallerId.asNumber(it).ifEmpty { null } }.orEmpty()
+        val name = labels.firstNotNullOfOrNull { CallerId.asName(it).ifEmpty { null } }.orEmpty()
+        val withheld = number.isEmpty() && (labels + text).any(CallerId::isPrivate)
+        svc.updateCallerFromNotification(number, name, withheld)
+    }
+
+    /** Gateway: reads the Phone app's posted call notification again (it may predate the call state). */
+    fun rescanDialer() {
+        val svc = Hub.service ?: return
+        val dialer = defaultDialer() ?: return
+        try {
+            activeNotifications?.filter { it.packageName == dialer }?.forEach { sbn ->
+                val n = sbn.notification ?: return@forEach
+                val ex = n.extras ?: return@forEach
+                if (!(n.category == Notification.CATEGORY_CALL || isCallStyle(n) || sbn.isOngoing)) return@forEach
+                val title = callerName(ex).ifBlank {
+                    ex.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty()
+                }
+                val text = (ex.getCharSequence(Notification.EXTRA_TEXT))?.toString().orEmpty()
+                reportDialerCaller(svc, n, ex, title, text)
+            }
+        } catch (e: Exception) {
+            Hub.log("Could not re-read the Phone notification: ${e.message ?: e.javaClass.simpleName}")
+        }
     }
 
     private fun defaultDialer(): String? = try {
