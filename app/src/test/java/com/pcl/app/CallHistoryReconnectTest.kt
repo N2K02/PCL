@@ -19,6 +19,19 @@ class CallHistoryReconnectTest {
         }
     }
 
+    @Test fun lateNumberAndNameFromRepeatedRingingAreSavedInHistory() {
+        try {
+            CallHistory.onLinkLost()
+            assertNull(CallHistory.onSimState(LinkService.CALL_RINGING, "", ""))
+            assertNull(CallHistory.onSimState(LinkService.CALL_RINGING, "55551234", "Alice"))
+            val record = CallHistory.onSimState(LinkService.CALL_IDLE, "", "")
+            assertEquals("55551234", record?.number)
+            assertEquals("Alice", record?.name)
+        } finally {
+            CallHistory.onLinkLost()
+        }
+    }
+
     @Test fun returningToIdleAfterLinkLossDoesNotInventHistory() {
         try {
             CallHistory.onSimState(LinkService.CALL_RINGING, "33333333", "")
