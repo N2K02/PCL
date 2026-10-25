@@ -538,27 +538,13 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 if (screen == MainTab.UPDATE) {
-                    Text("About & updates", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-                    androidx.compose.material3.ListItem(
-                        headlineContent = { Text("PCL") },
-                        supportingContent = { Text("Version " + AppUpdater.installedVersionName) },
-                        leadingContent = { Icon(Icons.Default.Settings, null) },
-                    )
+                    dev.n2k02.updater.N2K02UpdateTitle()
                     val experimentalEnabled = LiveUpdater.experimentalEnabled.collectAsState().value
-                    androidx.compose.foundation.layout.Row(verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) {
-                            Text("Experimental updates", style = MaterialTheme.typography.titleSmall)
-                            Text("Offer signed APKs from successful pull request builds. Test builds may have bugs.")
-                        }
-                        androidx.compose.material3.Switch(
-                            checked = experimentalEnabled,
-                            onCheckedChange = LiveUpdater::setExperimentalEnabled,
-                        )
-                    }
-                    androidx.compose.material3.HorizontalDivider()
                     dev.n2k02.updater.N2K02UpdateScreen(
                         controller = LiveUpdater.controller,
                         installGuard = LiveUpdater.installGuard,
+                        experimentalEnabled = experimentalEnabled,
+                        onExperimentalEnabledChange = LiveUpdater::setExperimentalEnabled,
                     )
                 }
                 if (screen == MainTab.SETTINGS) {
