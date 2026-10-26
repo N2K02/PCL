@@ -47,4 +47,19 @@ class NavigationTest {
         assertNull(Navigation.back(MainTab.HOME, false))
         assertNull(Navigation.back(MainTab.SETTINGS, false))
     }
+
+    @Test fun callsReturnsWhereItWasOpenedFrom() {
+        assertEquals(Navigation.Target(MainTab.SETTINGS), Navigation.back(MainTab.CALLS, false, previous = MainTab.SETTINGS))
+        assertEquals(Navigation.Target(MainTab.HOME), Navigation.back(MainTab.CALLS, false, previous = MainTab.HOME))
+        // No loop back into Calls, and Home when nothing is known.
+        assertEquals(Navigation.Target(MainTab.HOME), Navigation.back(MainTab.CALLS, false, previous = MainTab.CALLS))
+        assertEquals(Navigation.Target(MainTab.HOME), Navigation.back(MainTab.CALLS, false, previous = null))
+    }
+
+    @Test fun backNeverLeadsToALockedScreen() {
+        // Opening the Back target again through open() keeps setup enforced.
+        val target = Navigation.back(MainTab.CALLS, false, previous = MainTab.HOME)!!
+        assertEquals(Navigation.Target(MainTab.SETTINGS, permissions = true),
+            Navigation.open(target.tab, remote = true, setupReady = false))
+    }
 }

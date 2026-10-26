@@ -38,11 +38,14 @@ internal object Navigation {
         else -> Target(tab)
     }
 
-    /** Where Back goes from [screen], or null to leave the app. */
-    fun back(screen: MainTab, permissions: Boolean): Target? = when {
+    /**
+     * Where Back goes from [screen], or null to leave the app. Calls returns to the screen it
+     * was opened from ([previous]); nested Settings pages return to Settings. Never loops.
+     */
+    fun back(screen: MainTab, permissions: Boolean, previous: MainTab? = null): Target? = when {
         screen == MainTab.SETTINGS && permissions -> Target(MainTab.SETTINGS)
         screen == MainTab.DIAGNOSTICS || screen == MainTab.UPDATE -> Target(MainTab.SETTINGS)
-        screen == MainTab.CALLS -> Target(MainTab.HOME)
+        screen == MainTab.CALLS -> Target(previous?.takeIf { it != MainTab.CALLS } ?: MainTab.HOME)
         else -> null
     }
 }

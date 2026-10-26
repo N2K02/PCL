@@ -49,6 +49,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
 import dev.n2k02.theme.N2K02Theme
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -314,17 +315,20 @@ class MainActivity : ComponentActivity() {
             setupComplete()
         }
         val start = remember { Navigation.start(setupReady) }
-        var screen by remember { mutableStateOf(start.tab) }
-        var showingPermissions by remember { mutableStateOf(start.permissions) }
+        // Saved so rotation or Activity recreation keeps the screen; re-checked below.
+        var screen by rememberSaveable { mutableStateOf(start.tab) }
+        var showingPermissions by rememberSaveable { mutableStateOf(start.permissions) }
+        var previousTab by rememberSaveable { mutableStateOf<MainTab?>(null) }
         // Every tab change goes through Navigation, so setup can't be bypassed.
         fun go(tab: MainTab) {
             val target = Navigation.open(tab, remote, setupReady)
+            if (target.tab == MainTab.CALLS && screen != MainTab.CALLS) previousTab = screen
             screen = target.tab
             showingPermissions = target.permissions
         }
-        val backTarget = Navigation.back(screen, showingPermissions)
+        val backTarget = Navigation.back(screen, showingPermissions, previousTab)
         BackHandler(enabled = backTarget != null) {
-            backTarget?.let { screen = it.tab; showingPermissions = it.permissions }
+            backTarget?.let { go(it.tab); if (it.tab == MainTab.SETTINGS && !it.permissions) showingPermissions = false }
         }
         val updateStatus by LiveUpdater.controller.status.collectAsState()
         val unseenMissed by CallHistory.unseenMissed.collectAsState()

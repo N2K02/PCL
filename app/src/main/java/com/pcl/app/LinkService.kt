@@ -1211,7 +1211,10 @@ class LinkService : Service() {
     private fun shutdown() {
         if (!running && worker == null) return
         running = false
-        trafficHandler.removeCallbacks(trafficSampler)
+        // Pending timers: traffic sampling, dialer re-reads, call-log reports, ring limits,
+        // WhatsApp end grace periods and audio retries all stop with the link.
+        trafficHandler.removeCallbacksAndMessages(null)
+        audioTimeoutHandler.removeCallbacksAndMessages(null)
         downloadBytesPerSecond = 0L; uploadBytesPerSecond = 0L
         generation++
         try {
@@ -1234,6 +1237,14 @@ class LinkService : Service() {
             receiverRegistered = false
         }
         nm.cancel(ID_INCOMING)
+        nm.cancel(ID_SETUP)
+        // Remote: copies of Gateway calls and notifications can't be acted on any more.
+        ringingMirrorKey = null
+        mirroredCalls.keys.forEach { nm.cancel(TAG_MIRROR, it.hashCode()) }
+        mirroredCalls.clear()
+        ordinaryMirrors.forEach { nm.cancel(TAG_MIRROR, it) }
+        ordinaryMirrors.clear()
+        if (role == ROLE_REMOTE) whatsappTracker.reset()
         stopForeground(STOP_FOREGROUND_REMOVE)
         connectionState = "Stopped"
         callState = CALL_IDLE
