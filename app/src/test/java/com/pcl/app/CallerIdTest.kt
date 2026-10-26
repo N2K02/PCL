@@ -22,6 +22,8 @@ class CallerIdTest {
         assertEquals("+44 7700 900123", CallerId.asNumber("‪+44 7700 900123‬"))
         assertEquals("+44 7700 900123", CallerId.asNumber("⁦+44 7700 900123⁩"))
         assertEquals("+44 7700 900123", CallerId.asNumber("tel:+44 7700 900123"))
+        assertEquals("+44 7700 900123", CallerId.asNumber("TEL:+44 7700 900123"))
+        assertEquals("+44 7700 900123", CallerId.asNumber("Tel: +44 7700 900123"))
     }
 
     @Test fun namesAndShortCodesAreNotNumbers() {
