@@ -37,6 +37,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Hub
+import androidx.compose.material.icons.filled.BugReport
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Radio
 import androidx.compose.material.icons.filled.Refresh
@@ -56,7 +58,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private enum class MainTab { HOME, CALLS, UPDATE, SETTINGS }
 
 /** Permissions PCL has asked for before, to know when Android stops showing its dialog. */
 private const val PREF_ASKED_PERMISSIONS = "asked_permissions"
@@ -312,22 +313,32 @@ class MainActivity : ComponentActivity() {
             // Only the Gateway reads notifications; the Remote has no WhatsApp to watch.
             setupComplete()
         }
-        var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
-        var showingPermissions by remember { mutableStateOf(false) }
-        BackHandler(enabled = showingPermissions && screen == MainTab.SETTINGS) { showingPermissions = false }
-        BackHandler(enabled = screen == MainTab.UPDATE || screen == MainTab.CALLS) {
-            screen = if (screen == MainTab.UPDATE) MainTab.SETTINGS else MainTab.HOME
+        val start = remember { Navigation.start(setupReady) }
+        var screen by remember { mutableStateOf(start.tab) }
+        var showingPermissions by remember { mutableStateOf(start.permissions) }
+        // Every tab change goes through Navigation, so setup can't be bypassed.
+        fun go(tab: MainTab) {
+            val target = Navigation.open(tab, remote, setupReady)
+            screen = target.tab
+            showingPermissions = target.permissions
+        }
+        val backTarget = Navigation.back(screen, showingPermissions)
+        BackHandler(enabled = backTarget != null) {
+            backTarget?.let { screen = it.tab; showingPermissions = it.permissions }
         }
         val updateStatus by LiveUpdater.controller.status.collectAsState()
         val unseenMissed by CallHistory.unseenMissed.collectAsState()
         // Calls is the Remote's tab; a notification may ask for it.
         LaunchedEffect(requestedTab, remote, setupReady) {
             requestedTab?.let { tab ->
-                if (tab != MainTab.CALLS || (remote && setupReady)) screen = tab
+                go(tab)
                 requestedTab = null
             }
         }
-        LaunchedEffect(remote) { if (!remote && screen == MainTab.CALLS) screen = MainTab.HOME }
+        LaunchedEffect(remote, setupReady) {
+            // Role changed or setup no longer complete: re-check the screen being shown.
+            if (screen == MainTab.HOME || screen == MainTab.CALLS) go(screen)
+        }
         LaunchedEffect(showPermissions, setupReady) {
             if (showPermissions && !setupReady) { screen = MainTab.SETTINGS; showingPermissions = true }
             if (setupReady) showPermissions = false
@@ -343,7 +354,8 @@ class MainActivity : ComponentActivity() {
                                 when (screen) {
                                     MainTab.HOME -> Icons.Default.Hub
                                     MainTab.CALLS -> Icons.Default.Call
-                                    MainTab.UPDATE -> Icons.Default.Download
+                                    MainTab.UPDATE -> Icons.Default.Info
+                                    MainTab.DIAGNOSTICS -> Icons.Default.BugReport
                                     MainTab.SETTINGS -> if (showingPermissions) Icons.Default.CheckCircle else Icons.Default.Settings
                                 },
                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
@@ -353,6 +365,7 @@ class MainActivity : ComponentActivity() {
                                 MainTab.HOME -> "Home"
                                 MainTab.CALLS -> "Calls"
                                 MainTab.UPDATE -> "About & updates"
+                                MainTab.DIAGNOSTICS -> "Connection diagnostics"
                                 MainTab.SETTINGS -> if (showingPermissions) "Permissions" else "Settings"
                             }, fontWeight = FontWeight.SemiBold, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
@@ -369,8 +382,18 @@ class MainActivity : ComponentActivity() {
             },
             bottomBar = {
                 NavigationBar {
-                    NavigationBarItem(selected = screen == MainTab.HOME, onClick = { screen = MainTab.HOME; showingPermissions = false }, icon = { Icon(Icons.Default.Hub, null) }, label = { Text("Home") })
-                    NavigationBarItem(selected = screen != MainTab.HOME, onClick = { screen = MainTab.SETTINGS; showingPermissions = false }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") })
+                    val lit = Navigation.highlighted(screen)
+                    NavigationBarItem(selected = lit == MainTab.HOME, onClick = { go(MainTab.HOME) }, icon = { Icon(Icons.Default.Hub, null) }, label = { Text("Home") }, alwaysShowLabel = true)
+                    if (MainTab.CALLS in Navigation.bottomTabs(remote)) {
+                        NavigationBarItem(
+                            selected = lit == MainTab.CALLS,
+                            onClick = { go(MainTab.CALLS) },
+                            icon = { BadgedBox(badge = { if (unseenMissed > 0) Badge { Text("$unseenMissed") } }) { Icon(Icons.Default.Call, null) } },
+                            label = { Text("Calls") },
+                            alwaysShowLabel = true,
+                        )
+                    }
+                    NavigationBarItem(selected = lit == MainTab.SETTINGS, onClick = { go(MainTab.SETTINGS) }, icon = { dev.n2k02.updater.N2K02UpdateBadgedIcon(updateStatus) { Icon(Icons.Default.Settings, "Settings") } }, label = { Text("Settings") }, alwaysShowLabel = true)
                     NavigationBarItem(
                         selected = false,
                         onClick = { quitApp() },
@@ -572,22 +595,19 @@ class MainActivity : ComponentActivity() {
                         leadingContent = { Icon(Icons.Default.CheckCircle, null) },
                         modifier = Modifier.clickable { showingPermissions = true },
                     )
-                    if (remote) {
-                        ListItem(
-                            headlineContent = { Text("Calls") },
-                            supportingContent = { Text("Keypad, recents and synced contacts") },
-                            leadingContent = { Icon(Icons.Default.Call, null) },
-                            trailingContent = { if (unseenMissed > 0) Badge { Text("$unseenMissed") } },
-                            modifier = Modifier.clickable { if (setupReady) screen = MainTab.CALLS },
-                        )
-                    }
                     HorizontalDivider()
+                    ListItem(
+                        headlineContent = { Text("Connection diagnostics") },
+                        supportingContent = { Text("Activity log: link, calls and audio requests") },
+                        leadingContent = { Icon(Icons.Default.BugReport, null) },
+                        modifier = Modifier.clickable { go(MainTab.DIAGNOSTICS) },
+                    )
                     ListItem(
                         headlineContent = { Text("About & updates") },
                         supportingContent = { Text(if (updateStatus.hasPendingUpdate()) "A new update is available" else "App version and update checks") },
-                        leadingContent = { Icon(Icons.Default.Download, null) },
+                        leadingContent = { Icon(Icons.Default.Info, null) },
                         trailingContent = { dev.n2k02.updater.N2K02UpdateBadge(updateStatus) },
-                        modifier = Modifier.clickable { screen = MainTab.UPDATE },
+                        modifier = Modifier.clickable { go(MainTab.UPDATE) },
                     )
                 }
                 if (screen == MainTab.SETTINGS && showingPermissions) {
@@ -654,16 +674,16 @@ class MainActivity : ComponentActivity() {
 
                 if (screen == MainTab.HOME && setupReady && running && remote) {
                     // Dialing, recent calls and contacts live in the Calls tab.
-                    OutlinedButton(onClick = { screen = MainTab.CALLS }, modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(onClick = { go(MainTab.CALLS) }, modifier = Modifier.fillMaxWidth()) {
                         Icon(Icons.Default.Call, null); Spacer(Modifier.width(8.dp)); Text("Open Calls: keypad, recents, contacts")
                     }
                 }
 
-                if (screen == MainTab.HOME && setupReady) ActivityLogCard()
+                if (screen == MainTab.DIAGNOSTICS) ActivityLogCard()
                 if (screen == MainTab.HOME && !setupReady) {
                     Text("Complete setup first", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                     SectionCard(title = "Home locked", subtitle = "Grant the required permissions in Settings to enable the connection controls.") {
-                        Button(onClick = { screen = MainTab.SETTINGS; showingPermissions = true; requestMissingPermissions() }, modifier = Modifier.fillMaxWidth()) { Text("Allow permissions") }
+                        Button(onClick = { go(MainTab.SETTINGS); showingPermissions = true; requestMissingPermissions() }, modifier = Modifier.fillMaxWidth()) { Text("Allow permissions") }
                     }
                 }
                 if (screen == MainTab.UPDATE) {
@@ -721,7 +741,7 @@ class MainActivity : ComponentActivity() {
                             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Text(if (setupReady) "Setup complete" else "Setup incomplete", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
                                 Text(if (setupReady) "All required permissions are granted. Home is enabled." else "Use Set up beside each item that needs attention. Home remains disabled until required permissions are ready.", style = MaterialTheme.typography.bodyMedium)
-                                if (setupReady) Button(onClick = { screen = MainTab.HOME }, modifier = Modifier.fillMaxWidth()) { Text("Open Home") }
+                                if (setupReady) Button(onClick = { go(MainTab.HOME) }, modifier = Modifier.fillMaxWidth()) { Text("Open Home") }
                                 else {
                                     Text("Missing: " + RequiredPermissions.missingNames(this@MainActivity, role).joinToString(", "), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
                                     Button(onClick = { requestMissingPermissions() }, modifier = Modifier.fillMaxWidth()) { Text("Allow all missing") }

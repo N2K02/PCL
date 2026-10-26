@@ -95,9 +95,16 @@ val verifySharedUpdaterVersion = tasks.register("verifySharedUpdaterVersion") {
             check(segments.size >= 3 && segments.all { it != null }) {
                 "dev.n2k02:updater:$version is not a pinned numeric release version."
             }
-            val different = segments.filterNotNull().zip(listOf(0, 1, 19))
-                .firstOrNull { (actual, minimum) -> actual != minimum }
-            check(different == null || different.first > different.second) {
+            // Compare part by part, padding the shorter one with zeros:
+            // 0.2.0 > 0.1.19, 1.0.0 > 0.1.19, 0.1.19.1 > 0.1.19, 0.1.18 < 0.1.19.
+            val actual = segments.filterNotNull()
+            val minimum = listOf(0, 1, 19)
+            var comparison = 0
+            for (i in 0 until maxOf(actual.size, minimum.size)) {
+                comparison = actual.getOrElse(i) { 0 }.compareTo(minimum.getOrElse(i) { 0 })
+                if (comparison != 0) break
+            }
+            check(comparison >= 0) {
                 "dev.n2k02:updater:$version is outdated; require >= 0.1.19."
             }
         }
