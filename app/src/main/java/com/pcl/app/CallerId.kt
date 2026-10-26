@@ -49,7 +49,8 @@ object CallerId {
 
     /** The label as a phone number (cleaned, original formatting kept), or "" when it isn't one. */
     fun asNumber(label: String?): String {
-        val c = clean(label).removePrefix("tel:").trim()
+        val cleaned = clean(label)
+        val c = if (cleaned.startsWith("tel:", ignoreCase = true)) cleaned.substring(4).trim() else cleaned
         return if (NUMBER.matches(c) && c.count(Char::isDigit) >= 5) c else ""
     }
 
