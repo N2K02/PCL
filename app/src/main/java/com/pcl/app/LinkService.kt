@@ -430,6 +430,43 @@ class LinkService : Service() {
     /** Remote: mirrored Gateway calls on screen, by encoded key. */
     private val mirroredCalls = ConcurrentHashMap<String, MirrorCall>()
 
+    private data class ThirdPartyRecent(
+        val pkg: String, val app: String, var name: String, val startedAt: Long,
+        var state: String?, var connectedAt: Long? = null
+    )
+    private val thirdPartyRecents = ConcurrentHashMap<String, ThirdPartyRecent>()
+
+    private fun rememberThirdPartyRecent(key: String, pkg: String, app: String, title: String, state: String?) {
+        if (WhatsAppCalls.isWhatsApp(pkg) || pkg.isBlank()) return
+        val label = title.trim().takeUnless {
+            it.isBlank() || it.equals(app, true) ||
+                it.lowercase() in setOf("unknown", "unknown number", "incoming call", "ongoing call", "call in progress")
+        }.orEmpty()
+        val call = thirdPartyRecents.computeIfAbsent(key) {
+            ThirdPartyRecent(pkg, app, label, System.currentTimeMillis(), state)
+        }
+        if (label.isNotBlank()) call.name = label
+        if (state == WhatsAppCalls.ACTIVE && call.connectedAt == null) call.connectedAt = System.currentTimeMillis()
+        if (state != null) call.state = state
+    }
+
+    private fun finishThirdPartyRecent(key: String) {
+        val call = thirdPartyRecents.remove(key) ?: return
+        val label = call.name
+        val number = if (label.count(Char::isDigit) >= 5 &&
+            label.all { it.isDigit() || it in "+ -()." }) label else numberForName(label)
+        val name = if (label == number) "" else label
+        val type = when {
+            call.connectedAt != null -> CallHistory.Type.INCOMING
+            call.state == WhatsAppCalls.RINGING -> CallHistory.Type.MISSED
+            else -> CallHistory.Type.OUTGOING
+        }
+        val duration = call.connectedAt?.let { ((System.currentTimeMillis() - it) / 1000).coerceAtLeast(0) } ?: 0L
+        CallHistory.add(CallHistory.Record(number, name, type, call.startedAt, duration))
+        Hub.notifyUi()
+    }
+
+
     /** Remote: the Gateway call (WhatsApp etc.) for the Calls tab: a ringing one first. */
     val liveMirrorCall: MirrorCall?
         get() = mirroredCalls.values.sortedByDescending { it.ringing }.firstOrNull()
@@ -1182,6 +1219,7 @@ class LinkService : Service() {
                 nm.cancel(TAG_MIRROR, arg1.hashCode())
                 ordinaryMirrors.remove(arg1.hashCode())
                 mirroredCalls.remove(arg1)
+                finishThirdPartyRecent(arg1)
                 stopMirrorRinging(arg1)
             }
             "NOTIF_DISMISS" -> {
@@ -1793,6 +1831,7 @@ class LinkService : Service() {
             }
         }
         val state = reportedState ?: WhatsAppCalls.stateFromActionLabels(actionLabels)
+        rememberThirdPartyRecent(encKey, pkg, app, title, state)
         val ringing = state == WhatsAppCalls.RINGING
         val now = System.currentTimeMillis()
         val connectedAt = when {
