@@ -436,6 +436,9 @@ class LinkService : Service() {
     )
     private val thirdPartyRecents = ConcurrentHashMap<String, ThirdPartyRecent>()
 
+    private fun privateCallerLabel(value: String): Boolean = value.trim().lowercase() in
+        setOf("private number", "private caller", "no caller id", "withheld", "restricted", "anonymous")
+
     private fun rememberThirdPartyRecent(key: String, pkg: String, app: String, title: String, state: String?) {
         if (WhatsAppCalls.isWhatsApp(pkg) || pkg.isBlank()) return
         val label = title.trim().takeUnless {
@@ -452,8 +455,8 @@ class LinkService : Service() {
 
     private fun finishThirdPartyRecent(key: String) {
         val call = thirdPartyRecents.remove(key) ?: return
-        val label = call.name
-        val number = if (label.count(Char::isDigit) >= 5 &&
+        val label = if (privateCallerLabel(call.name)) "Private number" else call.name
+        val number = if (privateCallerLabel(label)) "" else if (label.count(Char::isDigit) >= 5 &&
             label.all { it.isDigit() || it in "+ -()." }) label else numberForName(label)
         val name = if (label == number) "" else label
         val type = when {
@@ -1369,9 +1372,9 @@ class LinkService : Service() {
             changed = true
         }
         if (callName.isEmpty() && safeName.isNotEmpty() &&
-            safeName.lowercase() !in setOf("unknown", "unknown number", "incoming call",
-                "ongoing call", "phone", "private number", "no caller id")) {
-            callName = safeName
+            (privateCallerLabel(safeName) || safeName.lowercase() !in setOf("unknown", "unknown number", "incoming call",
+                "ongoing call", "phone"))) {
+            callName = if (privateCallerLabel(safeName)) "Private number" else safeName
             changed = true
         }
         if (callNumber.isEmpty() && callName.isNotBlank()) {
