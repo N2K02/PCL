@@ -262,7 +262,11 @@ class NotifListener : NotificationListenerService() {
                         it !in listOf("Incoming call", "Ongoing call", "Phone",
                             "Unknown", "Unknown number", "Private number", "No caller ID") }
                     .orEmpty()
-                svc.updateCallerFromNotification(candidate, candidateName)
+                val privateLabel = listOf(personName, compatCallerName(ex), title, text)
+                    .any { it.trim().lowercase() in setOf("private number", "private caller",
+                        "no caller id", "withheld", "restricted", "anonymous") }
+                svc.updateCallerFromNotification(candidate,
+                    candidateName.ifEmpty { if (privateLabel) "Private number" else "" })
                 return
             }
             val previousSessionState = synchronized(thirdPartySessions) {
