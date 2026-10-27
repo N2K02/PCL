@@ -64,6 +64,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -111,6 +112,7 @@ class CallsUi(
     val gatewayVolume: Int,
     val gatewayMaxVolume: Int,
     val gatewayAudioRoute: String,
+    val gatewayVolumeMode: String,
 )
 
 class CallsActions(
@@ -120,6 +122,7 @@ class CallsActions(
     val hangUp: () -> Unit,
     val syncContacts: () -> Unit,
     val setGatewayVolume: (Int) -> Unit,
+    val setGatewayVolumeMode: (String) -> Unit,
     val setGatewayRoute: (String) -> Unit,
     val refreshGatewayAudio: () -> Unit,
 )
@@ -236,6 +239,17 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                         actions.refreshGatewayAudio()
                         delay(3000)
                     }
+                }
+                Text("Gateway volume mode")
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("AUTO" to "Auto", "CALL" to "Call", "MEDIA" to "Media", "RING" to "Ringtone")
+                        .forEach { (mode, label) ->
+                            FilterChip(
+                                selected = ui.gatewayVolumeMode == mode,
+                                onClick = { actions.setGatewayVolumeMode(mode) },
+                                label = { Text(label) },
+                            )
+                        }
                 }
                 Text("Gateway volume: " + ui.gatewayVolume + " / " + ui.gatewayMaxVolume)
                 Slider(value = ui.gatewayVolume.coerceIn(0, ui.gatewayMaxVolume).toFloat(),
