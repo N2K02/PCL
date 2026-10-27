@@ -25,8 +25,9 @@ object Protocol {
      *  - 3: HELLO carries versions; Gateway reports hotspot status (HOTSPOT_STATE)
      *  - 5: removed the legacy Wi-Fi hotspot workaround
      *  - 7: SIM-only command surface; third-party calls and notification mirroring removed
+     *  - 8: remote-selectable Gateway volume modes and synchronized mode status
      */
-    const val VERSION = 7
+    const val VERSION = 8
 }
 
 /**
@@ -38,7 +39,7 @@ object Commands {
     /** Sent by the Remote; handled only on the Gateway. */
     val GATEWAY_HANDLES = setOf(
         "ANSWER", "REJECT", "HANGUP", "DIAL", "SYNC_CONTACTS",
-        "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY"
+        "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY", "AUDIO_MODE"
     )
 
     /** Sent by the Gateway; handled only on the Remote. */
