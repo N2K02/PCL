@@ -70,7 +70,7 @@ Android only lets the phone's own dialer send keypad tones into a call, so PCL c
 
 ## Internet
 
-The Remote needs no internet: third-party calls run on the Gateway with the Gateway's mobile data. The Remote only needs internet (Wi-Fi, for example) to download PCL updates; otherwise install the new APK on it by hand.
+The Remote needs no internet: other-app calls run on the Gateway with the Gateway's mobile data. The Remote only needs internet (Wi-Fi, for example) to download PCL updates; otherwise install the new APK on it by hand.
 
 ## Limitations
 
