@@ -23,31 +23,28 @@ object Protocol {
      * versions are reported instead of failing silently.
      *  - no number: PCL 2.1 and older
      *  - 3: HELLO carries versions; Gateway reports hotspot status (HOTSPOT_STATE)
-     *  - 4: the Remote can ask the Gateway to start a WhatsApp call (WHATSAPP_CALL)
-     *  - 5: the Wi-Fi hotspot workaround is gone (no HOTSPOT_STATE, no WHATSAPP_CALL_TRIGGER)
+     *  - 5: removed the legacy Wi-Fi hotspot workaround
+     *  - 7: SIM-only command surface; third-party calls and notification mirroring removed
      */
-    const val VERSION = 6
+    const val VERSION = 7
 }
 
 /**
  * Which phone may act on each command. A command arriving at the wrong role is ignored,
  * so a peer can't, for example, make a Remote place calls.
- * HELLO goes both ways and is in neither set. WHATSAPP_CALL_STATE goes from the Gateway to
- * the Remote; older Remotes also sent their own, which the Gateway ignores.
+ * HELLO goes both ways and is in neither set.
  */
 object Commands {
     /** Sent by the Remote; handled only on the Gateway. */
     val GATEWAY_HANDLES = setOf(
         "ANSWER", "REJECT", "HANGUP", "DIAL", "SYNC_CONTACTS",
-        "WHATSAPP_CHAT", "WHATSAPP_CALL", "NOTIF_DISMISS", "NOTIF_ACTION",
         "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY"
     )
 
     /** Sent by the Gateway; handled only on the Remote. */
     val REMOTE_HANDLES = setOf(
         "CALL", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
-        "CONTACTS_RESULT", "NOTIF", "NOTIF_V2", "CALL_NOTIF", "NOTIF_REMOVE", "NOTIF_CLEAR_ORDINARY",
-        "WHATSAPP_CHAT_RESULT", "WHATSAPP_CALL_RESULT", "NOTIF_ACTION_RESULT", "AUDIO_STATUS"
+        "CONTACTS_RESULT", "AUDIO_STATUS"
     )
 }
 
