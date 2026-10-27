@@ -598,7 +598,6 @@ class MainActivity : ComponentActivity() {
                             Text("Choose Gateway or Remote above to load the matching permission checklist.")
                         }
                     }
-                    }
                     if (roleSelected) {
                         Card() {
                             Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
