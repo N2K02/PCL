@@ -106,7 +106,189 @@ class CallsUi(
     val simStatus: String?,
     /** The SIM call was answered or placed on the Gateway itself. */
     val simOnGateway: Boolean,
-    // ---------------------------------------------------------------- keypad
+    val contacts: List<Contact>,
+    val gatewayVolume: Int,
+    val gatewayMaxVolume: Int,
+    val gatewayAudioRoute: String,
+)
+
+class CallsActions(
+    val simCall: (number: String, name: String) -> Unit,
+    val answer: () -> Unit,
+    val reject: () -> Unit,
+    val hangUp: () -> Unit,
+    val syncContacts: () -> Unit,
+    val setGatewayVolume: (Int) -> Unit,
+    val setGatewayRoute: (String) -> Unit,
+    val refreshGatewayAudio: () -> Unit,
+)
+
+private enum class CallsSection(val label: String, val icon: ImageVector) {
+    KEYPAD("Keypad", Icons.Default.Dialpad),
+    RECENTS("Recents", Icons.Default.History),
+    CONTACTS("Contacts", Icons.Default.Contacts),
+}
+
+/** Green that reads as "call" in both light and dark themes. */
+private val CallGreen = Color(0xFF1E8E3E)
+
+/**
+ * Remote: the Calls tab. A dial keypad with smart search (type 5-6-2 to find "Joan"),
+ * recent calls through the Gateway, contacts with favourites, and the live call on top.
+ */
+@Composable
+fun CallsScreen(ui: CallsUi, actions: CallsActions, modifier: Modifier = Modifier) {
+    var section by rememberSaveable { mutableStateOf(CallsSection.KEYPAD) }
+    var number by rememberSaveable { mutableStateOf("") }
+    val unseenMissed by CallHistory.unseenMissed.collectAsState()
+    val names = remember(ui.contacts) { NameBook(ui.contacts) }
+
+    // Opening Recents counts as having seen the missed calls.
+    LaunchedEffect(section, unseenMissed) {
+        if (section == CallsSection.RECENTS && unseenMissed > 0) CallHistory.markMissedSeen()
+    }
+
+    val edit: (String) -> Unit = { n -> number = n; section = CallsSection.KEYPAD }
+
+    Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        if (ui.callState != LinkService.CALL_IDLE) {
+            ActiveCallCard(ui, actions)
+            Spacer(Modifier.height(10.dp))
+        } else if (mirror != null) {
+            AppCallCard(mirror, ui, actions)
+            Spacer(Modifier.height(10.dp))
+        } else if (!ui.connected) {
+            Text(
+                "Not connected to the Gateway. You can browse calls and contacts; calling needs the link.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(vertical = 6.dp),
+            )
+        }
+        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(top = 4.dp)) {
+            CallsSection.entries.forEachIndexed { i, s ->
+                SegmentedButton(
+                    selected = section == s,
+                    onClick = { section = s },
+                    shape = SegmentedButtonDefaults.itemShape(index = i, count = CallsSection.entries.size),
+                    icon = {
+                        if (s == CallsSection.RECENTS && unseenMissed > 0) {
+                            BadgedBox(badge = { Badge { Text("$unseenMissed") } }) {
+                                Icon(s.icon, null, Modifier.size(18.dp))
+                            }
+                        } else {
+                            Icon(s.icon, null, Modifier.size(18.dp))
+                        }
+                    },
+                    label = { Text(s.label, maxLines = 1) },
+                )
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            when (section) {
+                CallsSection.KEYPAD -> KeypadPane(ui, actions, names, number, onNumber = { number = it })
+                CallsSection.RECENTS -> RecentsPane(ui, actions, names, onEdit = edit)
+                CallsSection.CONTACTS -> ContactsPane(ui, actions, onEdit = edit)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- live call
+
+@Composable
+private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
+    val ringing = ui.callState == LinkService.CALL_RINGING
+    var now by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(ui.callState) {
+        while (ui.callState == LinkService.CALL_OFFHOOK) {
+            now = SystemClock.elapsedRealtime()
+            delay(1_000)
+        }
+    }
+    val since = CallHistory.connectedSince
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (ringing) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.PhoneInTalk, null, Modifier.size(28.dp))
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        when {
+                            ringing -> "Incoming SIM call"
+                            ui.simOnGateway -> "Taken on the Gateway"
+                            since > 0 -> "On a call · ${duration((now - since) / 1000)}"
+                            else -> "Calling…"
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(ui.callDisplay, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+            if (ui.connected) {
+                LaunchedEffect(ui.callState) {
+                    while (true) {
+                        actions.refreshGatewayAudio()
+                        delay(3000)
+                    }
+                }
+                Text("Gateway volume: " + ui.gatewayVolume + " / " + ui.gatewayMaxVolume)
+                Slider(value = ui.gatewayVolume.coerceIn(0, ui.gatewayMaxVolume).toFloat(),
+                    onValueChange = { actions.setGatewayVolume(it.toInt()) },
+                    valueRange = 0f..ui.gatewayMaxVolume.coerceAtLeast(1).toFloat(),
+                    steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0))
+                Text("SIM audio output: " + ui.gatewayAudioRoute)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { actions.setGatewayRoute("EARPIECE") },
+                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Earpiece") }
+                    OutlinedButton(onClick = { actions.setGatewayRoute("SPEAKER") },
+                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Speaker") }
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
+                if (ringing) {
+                    FilledTonalButton(
+                        onClick = actions.reject,
+                        colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    ) { Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(6.dp)); Text("Decline") }
+                    FilledTonalButton(
+                        onClick = actions.answer,
+                        colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                            containerColor = CallGreen, contentColor = Color.White,
+                        ),
+                        modifier = Modifier.weight(1f),
+                    ) { Icon(Icons.Default.Call, null); Spacer(Modifier.width(6.dp)); Text("Answer") }
+                } else {
+                    FilledTonalButton(
+                        onClick = actions.hangUp,
+                        colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    ) { Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(6.dp)); Text("Hang up") }
+                }
+            }
+            Text(
+                "Talk through the Gateway or its Bluetooth headset.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+    }
+}
+
+// ---------------------------------------------------------------- keypad
 
 private val KEYS = listOf(
     "1" to "", "2" to "ABC", "3" to "DEF",
@@ -228,7 +410,7 @@ private fun KeypadPane(
                         }
                     }
 
-                    // SIM call and delete actions.
+                    // SIM call · Delete, in the same three columns as the keys.
                     Row(horizontalArrangement = Arrangement.spacedBy(hGap), verticalAlignment = Alignment.CenterVertically) {
                         Spacer(Modifier.size(key))
                         FilledTonalIconButton(
