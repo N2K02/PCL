@@ -145,6 +145,18 @@ object CallHistory {
     fun onSimState(state: String, number: String, name: String): Record? {
         val previous = lastState
         if (state == previous) {
+            // Gateway may recover a missing number from the SIM call log shortly
+            // after IDLE. Repair only the latest unidentified call, never a private ID.
+            if (state == LinkService.CALL_IDLE && RecentCallNumber.isDialable(number)) {
+                val latest = _records.value.firstOrNull()
+                if (latest != null && latest.number.isBlank() &&
+                    System.currentTimeMillis() - latest.at < 120_000L) {
+                    val repaired = latest.copy(number = number, name = name)
+                    val updated = listOf(repaired) + _records.value.drop(1)
+                    _records.value = updated
+                    save(updated)
+                }
+            }
             // Ringing may be reported again once the caller's name is known.
             if (state == LinkService.CALL_RINGING || state == LinkService.CALL_OFFHOOK) {
                 if (number.isNotEmpty()) ringingNumber = number
@@ -191,7 +203,10 @@ object CallHistory {
                 }
                 connectedSince = 0L
                 declinedHere = false
-                record?.let(::add)
+                record?.let { entry ->
+                    add(if (entry.number.isBlank() && RecentCallNumber.isDialable(number))
+                        entry.copy(number = number, name = name) else entry)
+                }
                 return record
             }
         }
