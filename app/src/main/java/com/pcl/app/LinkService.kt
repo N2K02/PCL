@@ -943,6 +943,8 @@ class LinkService : Service() {
                 TelephonyManager.EXTRA_STATE_OFFHOOK -> CALL_OFFHOOK
                 else -> CALL_IDLE
             }
+            val priorStart = simCallStartedMs
+            val priorDirection = callDirection
             if (newState == CALL_RINGING && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "INCOMING"; callNumber = ""; callName = "" }
             else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "OUTGOING" }
             else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
