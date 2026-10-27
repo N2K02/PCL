@@ -53,6 +53,24 @@ class SimOnlyContractTest {
         assertFalse(history.contains("WHATSAPP"))
     }
 
+    @Test fun gatewayVolumeModesRemainSynchronizedAndSimOnly() {
+        val service = source("app/src/main/java/com/pcl/app/LinkService.kt")
+        val protocol = source("app/src/main/java/com/pcl/app/Protocol.kt")
+        val screen = source("app/src/main/java/com/pcl/app/CallsScreen.kt")
+        assertTrue(protocol.contains("const val VERSION = 8"))
+        assertTrue(protocol.contains("\"AUDIO_MODE\""))
+        listOf("\"AUTO\"", "\"CALL\"", "\"MEDIA\"", "\"RING\"").forEach {
+            assertTrue(service.contains(it))
+        }
+        assertTrue(service.contains("selectedGatewayVolumeMode = raw"))
+        assertTrue(service.contains("gatewayVolumeMode = p.getOrNull(4)"))
+        assertTrue(service.contains("AudioManager.STREAM_MUSIC"))
+        assertTrue(service.contains("AudioManager.STREAM_VOICE_CALL"))
+        assertTrue(service.contains("AudioManager.STREAM_RING"))
+        assertTrue(screen.contains("actions.setGatewayVolumeMode(mode)"))
+        assertTrue(service.contains("ACTION_AUDIO_DOWN, ACTION_AUDIO_UP"))
+    }
+
     @Test fun recentsAreReadOnlyWithClearConfirmation() {
         val screen = source("app/src/main/java/com/pcl/app/CallsScreen.kt")
         val recents = screen.substringAfter("private fun RecentsPane(")
