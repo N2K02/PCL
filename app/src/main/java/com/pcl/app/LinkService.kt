@@ -168,14 +168,13 @@ class LinkService : Service() {
         if (role == ROLE_REMOTE && connected) send("AUDIO_QUERY")
     }
 
-    private fun gatewayStream(audio: AudioManager): Int =
-        when {
-            callState != CALL_IDLE || audio.mode == AudioManager.MODE_IN_CALL ->
-                AudioManager.STREAM_VOICE_CALL
-            audio.mode == AudioManager.MODE_IN_COMMUNICATION ->
-                AudioManager.STREAM_VOICE_CALL
-            else -> AudioManager.STREAM_VOICE_CALL
-        }
+    private fun gatewayStream(audio: AudioManager): Int = when {
+        callState != CALL_IDLE ||
+            audio.mode == AudioManager.MODE_IN_CALL ||
+            audio.mode == AudioManager.MODE_IN_COMMUNICATION -> AudioManager.STREAM_VOICE_CALL
+        audio.isMusicActive -> AudioManager.STREAM_MUSIC
+        else -> AudioManager.STREAM_VOICE_CALL
+    }
 
     private fun gatewayAudioStep(raw: String, requestId: String = "") {
         val audio = getSystemService(AudioManager::class.java) ?: return
@@ -1145,8 +1144,8 @@ class LinkService : Service() {
 
     /**
      * Remote: the Gateway's SIM call changed. This phone rings for every incoming call, but
-     * once connected it only shows calls it answered or placed itself; a call answered or
-     * placed on the Gateway is left to the Gateway.
+     * once connected it keeps the call controls visible even if the Gateway answered,
+     * so volume adjustments remain accessible from the Remote.
      */
     private fun onRemoteCallUpdate(previous: String) {
         when (callState) {
@@ -1172,7 +1171,7 @@ class LinkService : Service() {
                     if (previous != CALL_OFFHOOK) Hub.log("Call in progress on gateway (${logCaller()})")
                 } else {
                     simCallOnGateway = true
-                    nm.cancel(ID_INCOMING)
+                    showOngoingCall()
                     if (previous != CALL_OFFHOOK) {
                         Hub.log(if (previous == CALL_RINGING) "Call answered on the Gateway" else "Call placed on the Gateway")
                     }
