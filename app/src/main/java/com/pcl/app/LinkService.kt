@@ -1053,69 +1053,38 @@ class LinkService : Service() {
     @Suppress("DEPRECATION")
     private fun gatewayAnswer() {
         if (!has(Manifest.permission.ANSWER_PHONE_CALLS)) {
-            if (tryCallNotificationFallback("answer")) return
             callControlError = "FAILED: Phone permission missing on Gateway"
-            Hub.log("Answer failed: 'Phone' permission missing on gateway; notification fallback unavailable")
             return
         }
         try {
             getSystemService(TelecomManager::class.java)!!.acceptRingingCall()
             callControlError = null
-            Hub.log("Sent answer request through Android Telecom")
+            Hub.log("SIM answer requested through Android Telecom")
         } catch (e: Exception) {
-            // OEM Phone apps may expose an Answer PendingIntent when Telecom control fails.
-            // Invoke only the action the dialer itself supplied; never synthesize a private intent.
-            val fallbackWorked = NotifListener.instance?.performCallAction("answer") == true
-            callControlError = if (fallbackWorked) null else
-                "FAILED: ${e.message ?: "Android rejected the answer request"}"
-            Hub.log(if (fallbackWorked) "Answered via the Phone notification action fallback"
-                else "Answer failed: ${e.message ?: e.javaClass.simpleName}")
+            callControlError = "FAILED: ${e.message ?: "Android rejected the answer request"}"
+            Hub.log("SIM answer failed: ${e.javaClass.simpleName}")
         }
     }
 
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun gatewayEnd(rejectRinging: Boolean = false) {
-        val fallbackKind = if (rejectRinging) "reject" else "end"
         if (Build.VERSION.SDK_INT < 28) {
-            if (tryCallNotificationFallback(fallbackKind)) return
-            callControlError = "FAILED: Ending calls needs Android 9 or a usable Phone notification action"
-            Hub.log("End call unavailable: Android version too old and no notification fallback worked")
+            callControlError = "FAILED: Ending SIM calls requires Android 9 or newer"
             return
         }
         if (!has(Manifest.permission.ANSWER_PHONE_CALLS)) {
-            if (tryCallNotificationFallback(fallbackKind)) return
             callControlError = "FAILED: Phone permission missing on Gateway"
-            Hub.log("End call failed: 'Phone' permission missing and notification fallback unavailable")
             return
         }
         try {
             val ok = getSystemService(TelecomManager::class.java)!!.endCall()
-            if (ok) {
-                callControlError = null
-                Hub.log("End-call request accepted by Android Telecom")
-                return
-            }
-            val fallbackWorked = NotifListener.instance?.performCallAction(fallbackKind) == true
-            callControlError = if (fallbackWorked) null else "FAILED: Android did not end the call"
-            Hub.log(if (fallbackWorked) "Call control used the Phone notification action fallback"
-                else "Android did not end the call and no matching notification action was available")
+            callControlError = if (ok) null else "FAILED: Android did not end the SIM call"
+            Hub.log(if (ok) "SIM call end requested" else "Android rejected SIM call end")
         } catch (e: Exception) {
-            val fallbackWorked = NotifListener.instance?.performCallAction(fallbackKind) == true
-            callControlError = if (fallbackWorked) null else
-                "FAILED: ${e.message ?: "Android rejected the end-call request"}"
-            Hub.log(if (fallbackWorked) "Call control used the Phone notification action fallback"
-                else "End call failed: ${e.message ?: e.javaClass.simpleName}")
+            callControlError = "FAILED: ${e.message ?: "Android rejected the end-call request"}"
+            Hub.log("SIM call end failed: ${e.javaClass.simpleName}")
         }
-    }
-
-    private fun tryCallNotificationFallback(kind: String): Boolean {
-        val worked = NotifListener.instance?.performCallAction(kind) == true
-        if (worked) {
-            callControlError = null
-            Hub.log("Call control used the default Phone notification action fallback")
-        }
-        return worked
     }
 
     /**
