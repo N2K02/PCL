@@ -53,6 +53,18 @@ class SimOnlyContractTest {
         assertFalse(history.contains("WHATSAPP"))
     }
 
+    @Test fun recentsAreReadOnlyWithClearConfirmation() {
+        val screen = source("app/src/main/java/com/pcl/app/CallsScreen.kt")
+        val recents = screen.substringAfter("private fun RecentsPane(")
+            .substringBefore("// ---------------------------------------------------------------- contacts")
+        assertTrue(recents.contains("ListItem("))
+        assertTrue(recents.contains("Clear call history?"))
+        assertTrue(recents.contains("CallHistory.clear()"))
+        assertFalse(recents.contains("PersonRow("))
+        assertFalse(recents.contains("onToggle"))
+        assertFalse(recents.contains("actions.simCall"))
+    }
+
     @Test fun manifestAndSettingsRequireNoNotificationListenerOrAccessibility() {
         val manifest = source("app/src/main/AndroidManifest.xml")
         val activity = source("app/src/main/java/com/pcl/app/MainActivity.kt")
