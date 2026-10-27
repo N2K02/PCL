@@ -659,18 +659,6 @@ class MainActivity : ComponentActivity() {
                             try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
                             catch (_: Exception) { toast("Open Settings → Notifications → Notification access, and allow PCL") }
                         }, modifier = Modifier.fillMaxWidth()) { Text("Open notification access settings") }
-                        var mirror by remember { mutableStateOf(prefs.getBoolean(Prefs.MIRROR, false)) }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Send other notifications to remote")
-                                Text("Messages and other apps. Calls always go to the Remote.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(checked = mirror, onCheckedChange = {
-                                mirror = it
-                                prefs.edit().putBoolean(Prefs.MIRROR, it).apply()
-                                if (!it) service?.clearOrdinaryMirrors()
-                            })
-                        }
                     }
                 }
 
