@@ -775,10 +775,9 @@ class LinkService : Service() {
         val p = msg.split("|")
         val cmd = p[0]
         val arg1 = p.getOrElse(1) { "" }
-        // Each command is only meaningful on one side of the link.
-        if ((cmd in Commands.GATEWAY_HANDLES && role != ROLE_GATEWAY) ||
-            (cmd in Commands.REMOTE_HANDLES && role != ROLE_REMOTE)
-        ) {
+        // Strict SIM-only allowlist; reject unsupported and wrong-role commands.
+        if (cmd != "HELLO" && !((role == ROLE_GATEWAY && cmd in Commands.GATEWAY_HANDLES) ||
+            (role == ROLE_REMOTE && cmd in Commands.REMOTE_HANDLES))) {
             Hub.log("Ignored $cmd: the ${if (role == ROLE_GATEWAY) "Gateway" else "Remote"} doesn't handle it")
             return
         }
@@ -791,12 +790,10 @@ class LinkService : Service() {
                 Hub.log("Peer is the $arg1 phone (PCL ${peerAppVersion.ifEmpty { "older version" }})")
                 versionWarning?.let { Hub.log("Version mismatch: $it") }
             }
-            // Sent by older PCL versions, which switched the Gateway's Wi-Fi hotspot for calls.
-            "HOTSPOT_STATE" -> Unit
             // gateway -> remote
             "CALL" -> {
                 val previousState = callState
-                callState = arg1.ifEmpty { CALL_IDLE }
+                callState = arg1.takeIf { it in setOf(CALL_IDLE, CALL_RINGING, CALL_OFFHOOK) } ?: CALL_IDLE
                 if (callState == CALL_RINGING) callControlError = null
                 callNumber = p.getOrElse(2) { "" }.trim()
                 val receivedName = p.getOrElse(3) { "" }.trim()
