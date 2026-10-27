@@ -155,9 +155,7 @@ fun CallsScreen(ui: CallsUi, actions: CallsActions, modifier: Modifier = Modifie
         if (ui.callState != LinkService.CALL_IDLE) {
             ActiveCallCard(ui, actions)
             Spacer(Modifier.height(10.dp))
-        } else if (mirror != null) {
-            AppCallCard(mirror, ui, actions)
-            Spacer(Modifier.height(10.dp))
+)
         } else if (!ui.connected) {
             Text(
                 "Not connected to the Gateway. You can browse calls and contacts; calling needs the link.",
