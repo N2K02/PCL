@@ -71,7 +71,7 @@ class SimOnlyContractTest {
         assertTrue(service.contains("ACTION_AUDIO_DOWN, ACTION_AUDIO_UP"))
     }
 
-    @Test fun recentsAreReadOnlyWithClearConfirmation() {
+    @Test fun recentsHaveClearConfirmationAndDialableCallbackOnly() {
         val screen = source("app/src/main/java/com/pcl/app/CallsScreen.kt")
         val recents = screen.substringAfter("private fun RecentsPane(")
             .substringBefore("// ---------------------------------------------------------------- contacts")
@@ -80,7 +80,9 @@ class SimOnlyContractTest {
         assertTrue(recents.contains("CallHistory.clear()"))
         assertFalse(recents.contains("PersonRow("))
         assertFalse(recents.contains("onToggle"))
-        assertFalse(recents.contains("actions.simCall"))
+        assertTrue(recents.contains("RecentCallNumber.isDialable(r.number)"))
+        assertTrue(recents.contains("actions.simCall(r.number, name)"))
+        assertTrue(recents.contains("enabled = ui.connected"))
     }
 
     @Test fun manifestAndSettingsRequireNoNotificationListenerOrAccessibility() {
