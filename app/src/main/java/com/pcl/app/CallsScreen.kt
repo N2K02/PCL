@@ -32,7 +32,6 @@ import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallMissed
 import androidx.compose.material.icons.automirrored.filled.CallReceived
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
@@ -107,7 +106,6 @@ class CallsUi(
     val simStatus: String?,
     /** The SIM call was answered or placed on the Gateway itself. */
     val simOnGateway: Boolean,
-    val whatsappStatus: String?,
     // ---------------------------------------------------------------- keypad
 
 private val KEYS = listOf(
@@ -230,7 +228,7 @@ private fun KeypadPane(
                         }
                     }
 
-                    // WhatsApp · Call · Delete, in the same three columns as the keys.
+                    // SIM call and delete actions.
                     Row(horizontalArrangement = Arrangement.spacedBy(hGap), verticalAlignment = Alignment.CenterVertically) {
                         Spacer(Modifier.size(key))
                         FilledTonalIconButton(
@@ -294,7 +292,7 @@ private fun FavouriteStrip(favourites: List<Contact>, onPick: (Contact) -> Unit)
     }
 }
 
-/** The last SIM or WhatsApp request's result, so a failed call isn't silent. */
+/** The last SIM request's result, so a failed call isn't silent. */
 @Composable
 private fun StatusLine(ui: CallsUi) {
     val sim = ui.simStatus?.takeIf { it.startsWith("FAILED:") || it.startsWith("PENDING:") }
@@ -464,7 +462,7 @@ private fun ContactRow(
 
 // ---------------------------------------------------------------- shared rows
 
-/** A person or call: tap to show Call / WhatsApp / Favourite / Edit; the phone icon calls at once. */
+/** A person or call: tap to show Call / Favourite / Edit; the phone icon calls at once. */
 @Composable
 private fun PersonRow(
     title: String,
