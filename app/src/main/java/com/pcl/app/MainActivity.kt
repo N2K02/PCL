@@ -314,6 +314,7 @@ class MainActivity : ComponentActivity() {
                         gatewayVolume = service?.gatewayVolume ?: 0,
                         gatewayMaxVolume = service?.gatewayMaxVolume ?: 1,
                         gatewayAudioRoute = service?.gatewayAudioRoute ?: "UNKNOWN",
+                        gatewayVolumeMode = service?.gatewayVolumeMode ?: "AUTO",
                     ),
                     actions = CallsActions(
                         simCall = { number, name -> service?.dial(number, name) },
@@ -322,6 +323,7 @@ class MainActivity : ComponentActivity() {
                         hangUp = { service?.hangUp() },
                         syncContacts = { service?.syncContacts(); refresh() },
                         setGatewayVolume = { service?.requestGatewayVolume(it) },
+                        setGatewayVolumeMode = { service?.requestGatewayVolumeMode(it) },
                         setGatewayRoute = { service?.requestGatewayRoute(it) },
                         refreshGatewayAudio = { service?.refreshGatewayAudio() },
                     ),
