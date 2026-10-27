@@ -44,7 +44,7 @@ object Commands {
     /** Sent by the Gateway; handled only on the Remote. */
     val REMOTE_HANDLES = setOf(
         "CALL", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
-        "CONTACTS_RESULT", "AUDIO_STATUS"
+        "CONTACTS_RESULT", "AUDIO_STATUS", "AUDIO_RESULT"
     )
 }
 
