@@ -497,7 +497,6 @@ private fun StatusLine(ui: CallsUi) {
 @Composable
 private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onEdit: (String) -> Unit) {
     val records by CallHistory.records.collectAsState()
-    var expanded by remember { mutableStateOf<Int?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
 
     if (records.isEmpty()) {
@@ -524,30 +523,26 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             }
             item(key = "call-$index-${r.at}") {
                 val name = r.name.ifEmpty { names.exact(r.number)?.name.orEmpty() }
-                PersonRow(
-                    title = name.ifEmpty { r.number.ifEmpty { "Unknown number" } },
-                    titleColor = if (r.type == CallHistory.Type.MISSED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    subtitle = buildString {
-                        
-                        append(typeLabel(r.type))
-                        append(" · ")
-                        append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
-                        if (r.durationSec > 0) append(" · ").append(duration(r.durationSec))
+                ListItem(
+                    headlineContent = {
+                        Text(name.ifEmpty { r.number.ifEmpty { "Unknown number" } },
+                            color = if (r.type == CallHistory.Type.MISSED) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurface)
                     },
-                    leading = {
-                        Icon(
-                            typeIcon(r.type), contentDescription = typeLabel(r.type),
-                            tint = if (r.type == CallHistory.Type.MISSED || r.type == CallHistory.Type.DECLINED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp),
-                        )
+                    supportingContent = {
+                        Text(buildString {
+                            append(typeLabel(r.type))
+                            append(" · ")
+                            append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
+                            if (r.durationSec > 0) append(" · ").append(duration(r.durationSec))
+                            if (name.isNotEmpty() && r.number.isNotEmpty()) append(" · ").append(r.number)
+                        })
                     },
-                    number = r.number,
-                    name = name,
-                    expanded = expanded == index,
-                    onToggle = { expanded = if (expanded == index) null else index },
-                    ui = ui,
-                    actions = actions,
-                    onEdit = onEdit,
+                    leadingContent = {
+                        Icon(typeIcon(r.type), contentDescription = typeLabel(r.type),
+                            tint = if (r.type == CallHistory.Type.MISSED || r.type == CallHistory.Type.DECLINED)
+                                MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                    },
                 )
             }
         }
@@ -557,7 +552,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             onDismissRequest = { confirmClear = false },
             title = { Text("Clear call history?") },
             text = { Text("This removes the list on this phone only. The Gateway's own call log isn't touched.") },
-            confirmButton = { TextButton(onClick = { CallHistory.clear(); confirmClear = false; expanded = null }) { Text("Clear") } },
+            confirmButton = { TextButton(onClick = { CallHistory.clear(); confirmClear = false }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
         )
     }
