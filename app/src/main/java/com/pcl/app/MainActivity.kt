@@ -233,12 +233,9 @@ class MainActivity : ComponentActivity() {
         val remote = activeRole == LinkService.ROLE_REMOTE
         val connected = running && service?.connected == true
         val callState = service?.callState ?: LinkService.CALL_IDLE
-        val notificationAccess = NotifListener.isEnabled(this)
-        val setupReady = remember(revision, role, roleSelected, notificationAccess) {
+        val setupReady = remember(revision, role, roleSelected) {
             val required = corePerms() + if (role == LinkService.ROLE_GATEWAY) gatewayPerms() else emptyList()
-            // Only the Gateway reads notifications; the Remote has no WhatsApp to watch.
-            roleSelected && required.distinct().all { granted(it) } &&
-                (role != LinkService.ROLE_GATEWAY || notificationAccess)
+            roleSelected && required.distinct().all { granted(it) }
         }
         var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
         var showingPermissions by remember { mutableStateOf(false) }
@@ -313,8 +310,6 @@ class MainActivity : ComponentActivity() {
                         callDisplay = service?.display().orEmpty(),
                         simStatus = service?.callControlError,
                         simOnGateway = service?.simCallOnGateway == true,
-                        whatsappStatus = service?.whatsappCallStatus,
-                        mirrorCall = service?.liveMirrorCall,
                         contacts = contacts,
                         gatewayVolume = service?.gatewayVolume ?: 0,
                         gatewayMaxVolume = service?.gatewayMaxVolume ?: 1,
@@ -322,11 +317,9 @@ class MainActivity : ComponentActivity() {
                     ),
                     actions = CallsActions(
                         simCall = { number, name -> service?.dial(number, name) },
-                        whatsappCall = { number, name -> service?.startWhatsAppCall(number, name) },
                         answer = { service?.answer() },
                         reject = { service?.reject() },
                         hangUp = { service?.hangUp() },
-                        pressMirror = { call, index, label -> service?.pressMirrorButton(call.key, index, label, call.pkg) },
                         syncContacts = { service?.syncContacts(); refresh() },
                         setGatewayVolume = { service?.requestGatewayVolume(it) },
                         setGatewayRoute = { service?.requestGatewayRoute(it) },
@@ -596,12 +589,6 @@ class MainActivity : ComponentActivity() {
                             PermissionSetupRow("Answer calls", "Allow call answering requests", granted(Manifest.permission.ANSWER_PHONE_CALLS)) { requestPermissions(arrayOf(Manifest.permission.ANSWER_PHONE_CALLS), 1) }
                             PermissionSetupRow("Place calls", "Place calls through the gateway SIM", granted(Manifest.permission.CALL_PHONE)) { requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 1) }
                             PermissionSetupRow("Contacts (for sync)", "Send Gateway contacts to the Remote and resolve caller names", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
-                            PermissionSetupRow("Notification access", "Send notifications and WhatsApp calls to the Remote", notificationAccess, actionLabel = "Open settings") { runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }.onFailure { toast("Open Android Settings → Notifications → Notification access") } }
-                            val callHelperEnabled = WhatsappCallAccessibilityService.isEnabled(this@MainActivity)
-                            PermissionSetupRow("WhatsApp calls (optional)", "Accessibility service \"PCL WhatsApp call helper\": lets PCL start the WhatsApp calls the Remote asks for", callHelperEnabled, actionLabel = "Open settings") {
-                                runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-                                    .onFailure { toast("Open Android Settings → Accessibility → Installed apps → PCL WhatsApp call helper") }
-                            }
                             if (Build.VERSION.SDK_INT >= 31) PermissionSetupRow("Bluetooth connection", "Connect to the paired remote phone", granted(Manifest.permission.BLUETOOTH_CONNECT)) { requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1) }
                         } else if (roleSelected) {
                             PermissionSetupRow("Local contacts (optional)", "Include this phone's contacts in Remote search", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
@@ -610,23 +597,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             Text("Choose Gateway or Remote above to load the matching permission checklist.")
                         }
-                        // Android 13+ blocks these two for apps installed from an APK file
-                        // until the user allows "restricted settings" in App info.
-                        // Only the Gateway needs them; the Remote has neither.
-                        if (roleSelected && role == LinkService.ROLE_GATEWAY && Build.VERSION.SDK_INT >= 33 &&
-                            (!notificationAccess || !WhatsappCallAccessibilityService.isEnabled(this@MainActivity))
-                        ) {
-                            Text(
-                                "Greyed out or \"Restricted setting\"? Android blocks Notification access and Accessibility for apps installed from an APK. Open App info, tap ⋮, choose Allow restricted settings, then try again.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedButton(onClick = {
-                                runCatching {
-                                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)))
-                                }.onFailure { toast("Open Android Settings → Apps → PCL") }
-                            }, modifier = Modifier.fillMaxWidth()) { Text("Open App info") }
-                        }
+                    }
                     }
                     if (roleSelected) {
                         Card() {
@@ -642,26 +613,6 @@ class MainActivity : ComponentActivity() {
                         OutlinedButton(onClick = { roleSelected = false; prefs.edit().remove(Prefs.ROLE).apply(); screen = MainTab.SETTINGS; refresh() }, modifier = Modifier.fillMaxWidth()) { Text("Reset device role") }
                     }
                     
-                if (roleSelected && role == LinkService.ROLE_GATEWAY) {
-                    SectionCard(title = "Notification sync", subtitle = "Calls sync automatically. Other notifications are optional.") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Notification access")
-                                Text(if (notificationAccess) "Enabled" else "Not enabled",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (notificationAccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                            }
-                            Icon(if (notificationAccess) Icons.Default.CheckCircle else Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = if (notificationAccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                        }
-                        OutlinedButton(onClick = {
-                            try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-                            catch (_: Exception) { toast("Open Settings → Notifications → Notification access, and allow PCL") }
-                        }, modifier = Modifier.fillMaxWidth()) { Text("Open notification access settings") }
-                    }
-                }
-
                     Text("PCL • Material 3 Expressive", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally))
                 }
             }
