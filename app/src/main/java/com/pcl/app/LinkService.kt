@@ -1110,8 +1110,7 @@ class LinkService : Service() {
                 }.orEmpty()
                 callDirection = p.getOrElse(4) { "" }
                 CallHistory.onSimState(callState, callNumber, callName)
-                    ?.takeIf { it.type == CallHistory.Type.MISSED }
-                    ?.let(::showMissedCall)
+
                 onRemoteCallUpdate(previousState)
             }
             // remote -> gateway
@@ -1199,8 +1198,8 @@ class LinkService : Service() {
                 else Hub.log("Contact sync failed: $detail")
             }
             // notifications: gateway -> remote
-            "NOTIF" -> showMirrored(arg1, p.getOrElse(2) { "" }, p.getOrElse(3) { "" }, p.drop(4).joinToString("/"))
-            "NOTIF_V2" -> showMirrored(arg1, decodeText(p.getOrElse(2) { "" }), decodeText(p.getOrElse(3) { "" }), decodeText(p.getOrElse(4) { "" }))
+            "NOTIF" -> clearOrdinaryMirrorsLocal()
+            "NOTIF_V2" -> clearOrdinaryMirrorsLocal()
             "CALL_NOTIF" -> {
                 val count = (p.getOrElse(5) { "0" }.toIntOrNull() ?: 0).coerceIn(0, 3)
                 val indices = ArrayList<Int>()
@@ -1762,7 +1761,7 @@ class LinkService : Service() {
     fun canRelay(): Boolean = running && connected && role == ROLE_GATEWAY
 
     /** Gateway: also send other notifications (messages etc.), as set in Settings. */
-    fun shouldMirror(): Boolean = canRelay() && Prefs.of(this).getBoolean(Prefs.MIRROR, false)
+    fun shouldMirror(): Boolean = false
 
     private fun encodeKey(k: String): String = encodeText(k)
     private fun decodeKey(k: String): String? = try { decodeText(k) } catch (_: Exception) { null }
@@ -1781,9 +1780,7 @@ class LinkService : Service() {
     }
 
     /** Gateway: forward a notification with delimiter-safe fields. */
-    fun mirrorPosted(key: String, app: String, title: String, text: String) {
-        send("NOTIF_V2", encodeKey(key), encodeText(app), encodeText(title), encodeText(text.take(2000)))
-    }
+    fun mirrorPosted(key: String, app: String, title: String, text: String) { /* Call-only mode. */ }
 
     /** Gateway: forward a third-party call notification and its available action buttons. */
     fun mirrorCallPosted(key: String, pkg: String, app: String, title: String, text: String, actionIndices: List<Int>, actionLabels: List<String>, state: String? = null) {
@@ -1902,7 +1899,7 @@ class LinkService : Service() {
     /** Remote: a Gateway WhatsApp call ended: add it to Recents, and say so if it was missed. */
     private fun onWhatsAppCallEnded(call: CallHistory.Record) {
         CallHistory.add(call)
-        if (call.type == CallHistory.Type.MISSED) showMissedCall(call)
+
         Hub.notifyUi()
     }
 
@@ -1990,35 +1987,6 @@ class LinkService : Service() {
     }
 
     /** Remote: a Gateway call (SIM or WhatsApp) rang and nobody answered. */
-    private fun showMissedCall(call: CallHistory.Record) {
-        val who = call.name.ifEmpty { call.number.ifEmpty { "Unknown number" } }
-        val open = openCallsPi()
-        val builder = Notification.Builder(this, CH_CALLS)
-            .setSmallIcon(android.R.drawable.stat_notify_missed_call)
-            .setContentTitle(if (call.whatsapp) "Missed WhatsApp call" else "Missed call")
-            .setContentText(who)
-            .setCategory(Notification.CATEGORY_MISSED_CALL)
-            .setWhen(call.at)
-            .setShowWhen(true)
-            .setAutoCancel(true)
-            .setContentIntent(open)
-        if (call.number.isNotEmpty()) {
-            val callBack = PendingIntent.getService(
-                this, if (call.whatsapp) 24 else 22,
-                Intent(this, LinkService::class.java)
-                    .setAction(if (call.whatsapp) ACTION_WHATSAPP_CALL_BACK else ACTION_CALL_BACK)
-                    .putExtra(EXTRA_NUMBER, call.number).putExtra(EXTRA_NAME, call.name),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            builder.addAction(action(android.R.drawable.sym_action_call, "Call back", callBack))
-        }
-        try {
-            nm.notify(if (call.whatsapp) ID_MISSED_WHATSAPP else ID_MISSED, builder.build())
-        } catch (e: Exception) {
-            Hub.log("Could not show missed-call notification: ${e.message ?: e.javaClass.simpleName}")
-        }
-    }
-
     private fun showIncoming() {
         val n = Notification.Builder(this, CH_CALLS)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
