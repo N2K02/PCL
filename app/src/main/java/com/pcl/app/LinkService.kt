@@ -32,6 +32,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
+import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
 import android.telecom.TelecomManager
@@ -962,6 +963,35 @@ class LinkService : Service() {
                 callName = ""
             }
             Hub.notifyUi()
+        }
+    }
+
+    /** Android may omit EXTRA_INCOMING_NUMBER; use only the matching SIM call-log row. */
+    @SuppressLint("MissingPermission")
+    private fun recoverRecentSimNumber(started: Long, ended: Long, direction: String) {
+        if (!has(Manifest.permission.READ_CALL_LOG) || started <= 0L) return
+        val expectedType = if (direction == "OUTGOING") CallLog.Calls.OUTGOING_TYPE else null
+        try {
+            contentResolver.query(CallLog.Calls.CONTENT_URI,
+                arrayOf(CallLog.Calls.NUMBER, CallLog.Calls.TYPE, CallLog.Calls.DATE),
+                "${CallLog.Calls.DATE} >= ? AND ${CallLog.Calls.DATE} <= ?",
+                arrayOf((started - 3000L).toString(), (ended + 3000L).toString()),
+                "${CallLog.Calls.DATE} DESC")?.use { cursor ->
+                while (cursor.moveToNext()) {
+                    val type = cursor.getInt(1)
+                    if (expectedType != null && type != expectedType) continue
+                    if (expectedType == null && type !in setOf(CallLog.Calls.INCOMING_TYPE,
+                            CallLog.Calls.MISSED_TYPE, CallLog.Calls.REJECTED_TYPE)) continue
+                    val number = cursor.getString(0).orEmpty()
+                    if (!RecentCallNumber.isDialable(number)) continue
+                    callNumber = number
+                    callName = lookupName(number)
+                    Hub.log("Recovered SIM caller number from matching call log")
+                    return
+                }
+            }
+        } catch (e: Exception) {
+            Hub.log("SIM call-log recovery unavailable: ${e.javaClass.simpleName}")
         }
     }
 
