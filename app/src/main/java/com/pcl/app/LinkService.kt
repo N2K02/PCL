@@ -1047,6 +1047,43 @@ class LinkService : Service() {
     }
 
     @SuppressLint("MissingPermission")
+    private fun gatewayDial(number: String) {
+        val n = number.trim()
+        if (n.isEmpty()) { callControlError = "FAILED: Empty phone number"; return }
+        if (!has(Manifest.permission.CALL_PHONE)) {
+            callControlError = "FAILED: Phone permission missing on Gateway"
+            Hub.log("Dial failed: 'Phone' permission missing on gateway")
+            return
+        }
+        try {
+            callNumber = n
+            callName = lookupName(n)
+            callDirection = "OUTGOING"
+            getSystemService(TelecomManager::class.java)!!
+                .placeCall(Uri.fromParts("tel", n, null), Bundle())
+            callControlError = null
+            Hub.log("Dialing ${logCaller(n)}")
+        } catch (e: Exception) {
+            callControlError = "FAILED: ${e.message ?: "Android rejected the dial request"}"
+            Hub.log("Dial failed: ${e.message}")
+        }
+    }
+
+    private fun lookupName(number: String): String {
+        if (!has(Manifest.permission.READ_CONTACTS)) return ""
+        return try {
+            val uri = Uri.withAppendedPath(
+                ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number)
+            )
+            contentResolver.query(
+                uri, arrayOf(ContactsContract.PhoneLookup.DISPLAY_NAME), null, null, null
+            )?.use { c -> if (c.moveToFirst()) c.getString(0) ?: "" else "" } ?: ""
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun gatewayAnswer() {
         if (!has(Manifest.permission.ANSWER_PHONE_CALLS)) {
