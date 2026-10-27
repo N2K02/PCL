@@ -276,11 +276,7 @@ class NotifListener : NotificationListenerService() {
             svc.mirrorCallPosted(sbn.key, sbn.packageName, appName(sbn.packageName), title, text, indices, labels, callState)
             return
         }
-        // Calls always go to the Remote; other notifications only while that's switched on.
-        if (!svc.canRelay() || !svc.shouldMirror() || sbn.isOngoing) return
-        val signature = title + "\u0000" + text
-        synchronized(lastSent) { if (lastSent[sbn.key] == signature) return; lastSent[sbn.key] = signature }
-        svc.mirrorPosted(sbn.key, appName(sbn.packageName), title, text)
+        // Ordinary notifications are never forwarded to the Remote.
     }
 
     override fun onNotificationRemoved(sbn: StatusBarNotification) {
