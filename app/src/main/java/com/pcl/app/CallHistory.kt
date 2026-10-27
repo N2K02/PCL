@@ -14,12 +14,10 @@ import java.io.File
  *
  * SIM calls are worked out from the Gateway's call states (ringing, in call, idle):
  * ringing then idle is missed (or declined, when declined from this phone), ringing then
- * in call is incoming, and in call without ringing is outgoing. WhatsApp calls on the
- * Gateway are worked out the same way by [WhatsAppCallTracker].
+ * in call is incoming, and in call without ringing is outgoing.
  */
 object CallHistory {
-    /** [WHATSAPP] is only in lists saved by PCL 2.8 and older: a WhatsApp call asked for from the Remote. */
-    enum class Type { INCOMING, OUTGOING, MISSED, DECLINED, WHATSAPP }
+    enum class Type { INCOMING, OUTGOING, MISSED, DECLINED }
 
     data class Record(
         val number: String,
@@ -29,8 +27,6 @@ object CallHistory {
         val at: Long,
         /** Talk time in seconds; 0 for calls that weren't answered. */
         val durationSec: Long = 0,
-        /** A WhatsApp call on the Gateway rather than a SIM call. */
-        val whatsapp: Boolean = false,
     )
 
     private const val FILE = "call_history.json"
@@ -79,7 +75,6 @@ object CallHistory {
                         type = runCatching { Type.valueOf(o.optString("t")) }.getOrNull() ?: return@mapNotNull null,
                         at = o.optLong("a"),
                         durationSec = o.optLong("d"),
-                        whatsapp = o.optBoolean("w"),
                     )
                 }
             }
@@ -103,7 +98,7 @@ object CallHistory {
             val arr = JSONArray()
             list.forEach { r ->
                 arr.put(JSONObject().put("n", r.number).put("m", r.name).put("t", r.type.name)
-                    .put("a", r.at).put("d", r.durationSec).put("w", r.whatsapp))
+                    .put("a", r.at).put("d", r.durationSec))
             }
             File(app.filesDir, FILE).writeText(arr.toString())
         } catch (e: Exception) {
