@@ -128,6 +128,20 @@ class LinkService : Service() {
     @Volatile var gatewayAudioRoute = "UNKNOWN"
         private set
 
+    @Volatile var gatewayVolumeMode = "AUTO"
+        private set
+    private val volumeModes = setOf("AUTO", "CALL", "MEDIA", "RING")
+    private var selectedGatewayVolumeMode: String
+        get() = Prefs.of(this).getString("gateway_volume_mode", "AUTO")
+            ?.takeIf { it in volumeModes } ?: "AUTO"
+        set(value) {
+            Prefs.of(this).edit().putString("gateway_volume_mode", value).apply()
+        }
+
+    fun requestGatewayVolumeMode(mode: String) {
+        if (mode in volumeModes) sendAudioRequest("AUDIO_MODE", mode)
+    }
+
     private val audioRequestSequence = AtomicLong()
     private val pendingAudioRequests = ConcurrentHashMap<String, Runnable>()
     private val audioTimeoutHandler = Handler(Looper.getMainLooper())
@@ -168,12 +182,27 @@ class LinkService : Service() {
         if (role == ROLE_REMOTE && connected) send("AUDIO_QUERY")
     }
 
-    private fun gatewayStream(audio: AudioManager): Int = when {
-        callState != CALL_IDLE ||
-            audio.mode == AudioManager.MODE_IN_CALL ||
-            audio.mode == AudioManager.MODE_IN_COMMUNICATION -> AudioManager.STREAM_VOICE_CALL
-        audio.isMusicActive -> AudioManager.STREAM_MUSIC
-        else -> AudioManager.STREAM_VOICE_CALL
+    private fun gatewayStream(audio: AudioManager): Int = when (selectedGatewayVolumeMode) {
+        "CALL" -> AudioManager.STREAM_VOICE_CALL
+        "MEDIA" -> AudioManager.STREAM_MUSIC
+        "RING" -> AudioManager.STREAM_RING
+        else -> when {
+            callState != CALL_IDLE ||
+                audio.mode == AudioManager.MODE_IN_CALL ||
+                audio.mode == AudioManager.MODE_IN_COMMUNICATION -> AudioManager.STREAM_VOICE_CALL
+            else -> AudioManager.STREAM_MUSIC
+        }
+    }
+
+    private fun gatewaySetVolumeMode(raw: String, requestId: String) {
+        if (raw !in volumeModes) {
+            send("AUDIO_RESULT", "MODE", "INVALID", requestId)
+            return
+        }
+        selectedGatewayVolumeMode = raw
+        Hub.log("Gateway volume mode: $raw")
+        send("AUDIO_RESULT", "MODE", "APPLIED", requestId)
+        gatewayAudioStatus()
     }
 
     private fun gatewayAudioStep(raw: String, requestId: String = "") {
@@ -227,7 +256,7 @@ class LinkService : Service() {
         val audio = getSystemService(AudioManager::class.java) ?: return
         val stream = gatewayStream(audio)
         send("AUDIO_STATUS", audio.getStreamVolume(stream).toString(),
-            audio.getStreamMaxVolume(stream).toString(), gatewayRoute(audio))
+            audio.getStreamMaxVolume(stream).toString(), gatewayRoute(audio), selectedGatewayVolumeMode)
     }
 
     private fun gatewaySetAudioVolume(raw: String, requestId: String = "") {
@@ -816,6 +845,7 @@ class LinkService : Service() {
             "DIAL" -> { gatewayDial(arg1); sendCallResult() }
             "SYNC_CONTACTS" -> sendContacts()
             "AUDIO_QUERY" -> gatewayAudioStatus()
+            "AUDIO_MODE" -> gatewaySetVolumeMode(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_VOLUME" -> gatewaySetAudioVolume(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_STEP" -> gatewayAudioStep(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_ROUTE" -> gatewaySetAudioRoute(arg1, p.getOrNull(2).orEmpty())
@@ -837,6 +867,7 @@ class LinkService : Service() {
                 gatewayVolume = (arg1.toIntOrNull() ?: 0).coerceAtLeast(0)
                 gatewayMaxVolume = (p.getOrNull(2)?.toIntOrNull() ?: 1).coerceAtLeast(1)
                 gatewayAudioRoute = p.getOrNull(3).orEmpty().takeIf { it in setOf("SPEAKER", "EARPIECE", "BLUETOOTH", "WIRED_HEADSET") } ?: "UNKNOWN"
+                gatewayVolumeMode = p.getOrNull(4).orEmpty().takeIf { it in volumeModes } ?: "AUTO"
             }
             "CALL_RESULT" -> {
                 val detail = p.drop(2).joinToString("|")
