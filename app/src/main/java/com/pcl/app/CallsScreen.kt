@@ -558,6 +558,17 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                             tint = if (r.type == CallHistory.Type.MISSED || r.type == CallHistory.Type.DECLINED)
                                 MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                     },
+                    trailingContent = {
+                        if (RecentCallNumber.isDialable(r.number)) {
+                            IconButton(
+                                onClick = { actions.simCall(r.number, name) },
+                                enabled = ui.connected,
+                            ) {
+                                Icon(Icons.Default.Call, contentDescription = "Call ${r.number}",
+                                    tint = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    },
                 )
             }
         }
