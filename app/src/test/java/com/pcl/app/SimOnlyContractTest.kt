@@ -22,6 +22,7 @@ class SimOnlyContractTest {
         assertTrue("CALL_RESULT" in Commands.REMOTE_HANDLES)
         assertTrue("CONTACTS" in Commands.REMOTE_HANDLES)
         assertTrue("AUDIO_STATUS" in Commands.REMOTE_HANDLES)
+        assertTrue("AUDIO_RESULT" in Commands.REMOTE_HANDLES)
         val unsupported = listOf("WHATSAPP_CALL", "WHATSAPP_CHAT", "CALL_NOTIF", "NOTIF", "NOTIF_V2",
             "NOTIF_ACTION", "NOTIF_REMOVE", "WHATSAPP_CALL_STATE", "NOTIF_DISMISS")
         unsupported.forEach {
@@ -36,6 +37,9 @@ class SimOnlyContractTest {
             "showMirroredCall", "NOTIF_ACTION", "NotifListener").forEach {
             assertFalse("Obsolete service dependency: $it", service.contains(it))
         }
+        assertTrue(service.contains("cmd != \"HELLO\""))
+        assertTrue(service.contains("cmd in Commands.GATEWAY_HANDLES"))
+        assertTrue(service.contains("cmd in Commands.REMOTE_HANDLES"))
         assertTrue(service.contains("gatewayAnswer()"))
         assertTrue(service.contains("gatewayEnd("))
         assertTrue(service.contains("onRemoteCallUpdate("))
