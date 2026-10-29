@@ -64,12 +64,10 @@ class RecentCallActionsPolicyTest {
     }
 
     @Test fun exactDateTimeAndDurationFormat() {
-        assertEquals("01/01/1970 00:00", RecentCallActionsPolicy.dateTime(
-            0L, Locale.US).let { // date formatting follows the device timezone
-                // Compare structure independently of local timezone.
-                assertTrue(it.matches(Regex("\\d{2}/\\d{2}/\\d{4} \\d{2}:\\d{2}")))
-                "01/01/1970 00:00"
-            })
+        // The actual hour follows the device timezone; verify exactly the
+        // requested display structure without hardcoding a timezone.
+        val shown = RecentCallActionsPolicy.dateTime(0L, Locale.US)
+        assertTrue(shown.matches(Regex("\\d{2}/\\d{2}/\\d{4} \\d{2}:\\d{2}")))
         assertEquals("00:00", RecentCallActionsPolicy.duration(0))
         assertEquals("02:05", RecentCallActionsPolicy.duration(125))
         assertEquals("1:01:01", RecentCallActionsPolicy.duration(3661))
