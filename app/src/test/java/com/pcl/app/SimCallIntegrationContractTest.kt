@@ -47,7 +47,8 @@ class SimCallIntegrationContractTest {
     @Test fun recentsAndLiveCardsShowSameSourceWithNoGuessedSim() {
         val ui = source("CallsScreen")
         val main = source("MainActivity")
-        assertTrue(ui.contains("badges = { RecentCallBadges(r) }"))
+        assertTrue(ui.contains("RecentCallCard("))
+        assertTrue(source("RecentCallCard").contains("RecentCallBadges(record)"))
         assertTrue(ui.contains("RecentCallChip("))
         assertTrue(ui.contains("Icons.Default.SimCard"))
         assertTrue(main.contains("simIdentity = service?.callSimIdentity"))
