@@ -533,8 +533,9 @@ class LinkService : Service() {
         if (reason != null) Hub.log("Link restarted $reason")
         trafficHandler.removeCallbacks(trafficSampler)
         trafficHandler.postDelayed(trafficSampler, TRAFFIC_SAMPLE_MS)
-        if (role == ROLE_GATEWAY) registerPhoneReceiver()
+        // Establish a generation before scheduling background provider reads.
         startWorker()
+        if (role == ROLE_GATEWAY) registerPhoneReceiver()
     }
 
     // ---------------------------------------------------------------- public actions (UI)
@@ -1724,6 +1725,13 @@ class LinkService : Service() {
     }
 
     /** Opens PCL on the Calls tab, where the live call has its buttons. */
+    private fun incomingCallPi(): PendingIntent = PendingIntent.getActivity(
+        this, 24,
+        Intent(this, IncomingCallActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
     private fun openCallsPi(): PendingIntent = PendingIntent.getActivity(
         this, 23,
         Intent(this, MainActivity::class.java)
@@ -1794,7 +1802,7 @@ class LinkService : Service() {
             .setCategory(Notification.CATEGORY_CALL)
             .setOngoing(true)
             .setContentIntent(openCallsPi())
-            .setFullScreenIntent(openCallsPi(), true)
+            .setFullScreenIntent(incomingCallPi(), true)
             .addAction(action(android.R.drawable.ic_menu_close_clear_cancel, "Reject", actionPi(ACTION_REJECT, 11)))
             .addAction(action(android.R.drawable.sym_action_call, "Answer", actionPi(ACTION_ANSWER, 12)))
             .build()

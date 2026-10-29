@@ -49,7 +49,7 @@ PCL needs Android 8.0 or newer. It never needs the microphone.
 
 | Feature | What it does |
 |---|---|
-| SIM calls | The Remote rings for incoming Gateway calls and shows the caller (and contact name, with Contacts permission on the Gateway). It can answer, decline, end, and dial through the Gateway's SIM. A call answered on the Gateway itself stops the Remote ringing and isn't shown there; a call placed on the Gateway isn't shown either. Missed calls appear in Calls → Recents without persistent alerts. |
+| SIM calls | The Remote rings for incoming Gateway calls and shows the caller (and contact name, with Contacts permission on the Gateway). It can answer, decline, end, and dial through the Gateway's SIM. A call answered or placed on the Gateway stops Remote ringing but remains visible as an ongoing call with volume and output controls. Missed calls appear in Calls → Recents without persistent alerts. |
 | Calls tab | On the Remote, next to Home. See [Calls tab](#calls-tab). |
 | Contacts | The Gateway's contacts are copied to the Remote for offline search. On each connection the phones compare a fingerprint and only resync when the list changed; the sync button in **Calls → Contacts** forces a refresh. |
 | Call alerts | Incoming and active SIM calls appear on the Remote only while the call is ongoing. Missed or ended calls do not leave alerts. |
@@ -74,7 +74,9 @@ The Remote needs no internet: other-app calls run on the Gateway with the Gatewa
 
 ## Limitations
 
-- **SIM call controls depend on Android and the manufacturer.** PCL uses Android's Telecom API. If that fails or isn't allowed, it falls back to a matching button on the system Phone app's call notification (keep that app's notifications enabled). It uses no hidden APIs, reflection, root or ADB. If neither route is available on a phone, PCL can't answer or end calls there.
+- **SIM call controls depend on Android and the manufacturer.** PCL uses the public Android Telecom API. Some phones restrict answering or ending cellular calls for non-default dialers. PCL does not currently implement notification-button fallback, hidden APIs, root or ADB. Ending a call through this API requires Android 9 (API 28) or newer. Android 8 devices can still pair and view call state, but cannot use PCL to end calls.
+- **Optional Call Log enrichment is installer-restricted.** PCL declares READ_CALL_LOG but Android may refuse to grant it unless the installer explicitly allowlists the restricted permission. Normal SIM calling and contact synchronization do not depend on this permission; optional post-call caller recovery may be unavailable.
+- **Locked Remote call alerts:** Only a minimal incoming-call interface can appear above the keyguard, not private Recents, Contacts or Settings. On Android 14 and newer, full-screen alerts may need to be enabled in system settings.
 - **Caller numbers aren't always available.** Android may report an outgoing call without its number. On startup PCL reads the current call state, but not the number or direction.
 - **Bluetooth uses the secure, paired RFCOMM socket** and never falls back to an insecure one. If the phones can't connect, remove the pairing on both, pair again, and restart PCL on both.
 - **Battery:** PCL connects only to the selected paired phone and never scans. Reconnect attempts back off from 3 to 30 seconds while the other phone is unreachable. Turning off notification mirroring saves a little more.

@@ -83,8 +83,8 @@ class MainActivity : ComponentActivity() {
         }
         prefs = Prefs.of(this)
         role = prefs.getString(Prefs.ROLE, LinkService.ROLE_GATEWAY) ?: LinkService.ROLE_GATEWAY
-        roleSelected = true
-        if (!prefs.contains(Prefs.ROLE)) prefs.edit().putString(Prefs.ROLE, LinkService.ROLE_GATEWAY).apply()
+        // Do not silently assign the SIM-carrying Gateway role on first launch.
+        roleSelected = prefs.contains(Prefs.ROLE)
         selectedDevice = prefs.getString(Prefs.PEER_DEVICE, null)
         CallLogger.init(this)
         CallHistory.init(this)
@@ -504,13 +504,27 @@ class MainActivity : ComponentActivity() {
                         headlineContent = { Text("Call history (optional)") },
                         supportingContent = { Text(if (granted(Manifest.permission.READ_CALL_LOG))
                             "Verified SIM call history enrichment enabled" else
-                            "Allow optional Call Log access; installer must allowlist restricted permission") },
+                            "Optional SIM metadata: restricted READ_CALL_LOG requires installer allowlisting; normal calls work without it") },
                         leadingContent = { Icon(Icons.Default.History, null) },
                         modifier = Modifier.clickable {
                             if (!granted(Manifest.permission.READ_CALL_LOG))
                                 requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 91)
                         },
                     )
+                    if (Build.VERSION.SDK_INT >= 34 &&
+                        !getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()) {
+                        ListItem(
+                            headlineContent = { Text("Incoming call pop-ups") },
+                            supportingContent = { Text("Enable full-screen alerts for calls while the Remote is locked") },
+                            leadingContent = { Icon(Icons.Default.Call, null) },
+                            modifier = Modifier.clickable {
+                                runCatching {
+                                    startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                        android.net.Uri.parse("package:$packageName")))
+                                }
+                            },
+                        )
+                    }
                     ListItem(
                         headlineContent = { Text("Logs") },
                         supportingContent = { Text("Persistent diagnostics and crash reports") },
