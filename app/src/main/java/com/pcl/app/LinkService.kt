@@ -1021,6 +1021,8 @@ class LinkService : Service() {
         if (!running && worker == null) return
         running = false
         trafficHandler.removeCallbacks(trafficSampler)
+        pendingCallLogTasks.forEach(trafficHandler::removeCallbacks)
+        pendingCallLogTasks.clear()
         downloadBytesPerSecond = 0L; uploadBytesPerSecond = 0L
         generation++
         try {
@@ -1127,6 +1129,20 @@ class LinkService : Service() {
                     ?.takeIf { it.type == CallHistory.Type.MISSED }
                     ?.let(::showMissedCall)
                 onRemoteCallUpdate(previousState)
+            }
+            "CALL_LOGGED" -> {
+                val started = arg1.toLongOrNull() ?: return
+                val number = CallerId.asNumber(p.getOrNull(2)?.let(::decodeText))
+                val name = p.getOrNull(3)?.let(::decodeText).orEmpty()
+                val withheld = p.getOrNull(4) == "1"
+                val slot = p.getOrNull(5)?.toIntOrNull()?.takeIf { it in 0..3 }
+                val sim = slot?.let {
+                    SimCallIdentity(it, p.getOrNull(6)?.let(::decodeText).orEmpty(),
+                        p.getOrNull(7)?.let(::decodeText).orEmpty())
+                }
+                CallHistory.amendSim(started, number, name, withheld, sim)
+                    ?.let { Hub.log("A completed SIM call received verified call history details") }
+                Hub.notifyUi()
             }
             // remote -> gateway
             "ANSWER" -> { gatewayAnswer(); sendCallResult() }
@@ -1285,11 +1301,50 @@ class LinkService : Service() {
     // ---------------------------------------------------------------- gateway: SIM calls
 
     @Volatile private var simCallStartedMs = 0L
+    private val pendingCallLogTasks = mutableSetOf<Runnable>()
     /** Verified subscription only. Never use the default DATA SIM as a guess. */
     @Volatile var callSimIdentity: SimCallIdentity? = null
         private set
 
     fun simCallStartedAt(): Long = simCallStartedMs
+
+    /** One short delayed lookup (with one retry), only after an actual SIM
+     *  session has ended. Never query the call log in the ringing/recording path.
+     */
+    private fun enrichCompletedSimCall(
+        startedAt: Long, direction: String, number: String, sim: SimCallIdentity?,
+    ) {
+        if (!running || role != ROLE_GATEWAY || !OptionalSimCallLog.canRead(this) ||
+            startedAt <= 0L || direction !in setOf("INCOMING", "OUTGOING")) return
+        val currentGeneration = generation
+        fun schedule(delayMs: Long, retry: Boolean) {
+            lateinit var task: Runnable
+            task = Runnable {
+                pendingCallLogTasks.remove(task)
+                if (!running || generation != currentGeneration ||
+                    role != ROLE_GATEWAY || !OptionalSimCallLog.canRead(this)) return@Runnable
+                io.execute {
+                    if (!running || generation != currentGeneration) return@execute
+                    val match = OptionalSimCallLog.read(this, startedAt, direction, number, sim)
+                    if (match == null) {
+                        if (retry) trafficHandler.post { schedule(10_000L, false) }
+                        return@execute
+                    }
+                    if (!connected || writer == null) return@execute
+                    send("CALL_LOGGED", startedAt.toString(),
+                        encodeText(match.number), encodeText(match.name),
+                        if (match.privateCaller) "1" else "0",
+                        match.sim?.slotIndex?.toString().orEmpty(),
+                        encodeText(match.sim?.displayName.orEmpty()),
+                        encodeText(match.sim?.carrier.orEmpty()))
+                    Hub.log("Optional SIM call history enrichment matched; details sent to Remote")
+                }
+            }
+            pendingCallLogTasks.add(task)
+            trafficHandler.postDelayed(task, delayMs)
+        }
+        schedule(2_500L, true)
+    }
 
     private val phoneReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
@@ -1297,6 +1352,10 @@ class LinkService : Service() {
             @Suppress("DEPRECATION")
             val num = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
             val previousState = callState
+            val completedStart = simCallStartedMs
+            val completedDirection = callDirection
+            val completedNumber = callNumber
+            val completedSim = callSimIdentity
             val previousSimIdentity = callSimIdentity
             val newState = when (st) {
                 TelephonyManager.EXTRA_STATE_RINGING -> CALL_RINGING
@@ -1343,6 +1402,10 @@ class LinkService : Service() {
                 callNumber = ""
                 callName = ""
                 callSimIdentity = null
+                if (previousState != CALL_IDLE) {
+                    enrichCompletedSimCall(
+                        completedStart, completedDirection, completedNumber, completedSim)
+                }
             }
             Hub.notifyUi()
         }
