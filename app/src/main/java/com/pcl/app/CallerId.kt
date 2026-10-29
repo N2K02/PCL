@@ -17,7 +17,7 @@ object CallerId {
 
     /** Labels that mean "no number" because the caller withheld it. */
     private val PRIVATE_LABELS = setOf(
-        "private number", "private", "no caller id", "restricted", "withheld", "number withheld",
+        "private number", "private caller", "private", "no caller id", "restricted", "withheld", "number withheld",
         "hidden number", "anonymous", "blocked", "numéro masqué", "numero privato", "número privado",
         "unterdrückte nummer", "privat"
     )
