@@ -622,6 +622,10 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
     val records by CallHistory.records.collectAsState()
     var expanded by remember { mutableStateOf<Int?>(null) }
     var confirmClear by remember { mutableStateOf(false) }
+    var filterName by rememberSaveable { mutableStateOf(SimRecentsAnalytics.Filter.ALL.name) }
+    val filter = SimRecentsAnalytics.Filter.entries.firstOrNull { it.name == filterName }
+        ?: SimRecentsAnalytics.Filter.ALL
+    val shownRecords = SimRecentsAnalytics.filter(records, filter)
 
     if (records.isEmpty()) {
         EmptyState(Icons.Default.History, "No calls yet", "Calls you make or get through the Gateway show up here.")
@@ -630,14 +634,58 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("${records.size} calls", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                Text("${shownRecords.size} of ${records.size} calls", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 TextButton(onClick = { confirmClear = true }) {
                     Icon(Icons.Default.DeleteSweep, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Clear")
                 }
             }
         }
+        item {
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(7.dp),
+                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+            ) {
+                items(SimRecentsAnalytics.Filter.entries.toList(), key = { it.name }) { choice ->
+                    val chosen = filter == choice
+                    FilledTonalButton(
+                        onClick = { filterName = choice.name; expanded = null },
+                        colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
+                            containerColor = if (chosen) MaterialTheme.colorScheme.secondaryContainer
+                                else MaterialTheme.colorScheme.surfaceContainerHigh,
+                        ),
+                        contentPadding = PaddingValues(horizontal = 13.dp, vertical = 3.dp),
+                    ) {
+                        Icon(Icons.Default.SimCard, contentDescription = null,
+                            modifier = Modifier.size(15.dp))
+                        Spacer(Modifier.width(5.dp))
+                        Text(choice.title, style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+        }
+        item {
+            Text("SIM call statistics · saved history", style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(listOf(0, 1, -1)) { slot ->
+                    val selected = if (slot < 0) null else slot
+                    SimStatisticsTile(
+                        title = if (slot < 0) "Other / unknown SIM" else "SIM ${slot + 1}",
+                        stats = SimRecentsAnalytics.stats(records, selected),
+                    )
+                }
+            }
+        }
+        if (shownRecords.isEmpty()) {
+            item {
+                EmptyState(Icons.Default.History, "No calls for ${filter.title}",
+                    "Calls appear here when the Gateway can identify this SIM.")
+            }
+        }
         var lastDay = ""
-        records.forEachIndexed { index, r ->
+        shownRecords.forEachIndexed { index, r ->
             val day = dayLabel(r.at)
             if (day != lastDay) {
                 lastDay = day
@@ -691,6 +739,33 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             confirmButton = { TextButton(onClick = { CallHistory.clear(); confirmClear = false; expanded = null }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
         )
+    }
+}
+
+/** Compact all-time metrics. VoIP is intentionally excluded from SIM totals. */
+@Composable
+private fun SimStatisticsTile(title: String, stats: SimRecentsAnalytics.Stats) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+        shape = RoundedCornerShape(18.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.50f)),
+        modifier = Modifier.width(208.dp),
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(title, style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+            Text("${stats.calls} calls", style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold)
+            Text("↓ ${stats.incoming} incoming   ↑ ${stats.outgoing} outgoing",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${stats.missed} missed · ${stats.declined} declined",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Talk time ${duration(stats.talkSeconds)}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
