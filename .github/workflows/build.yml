@@ -111,9 +111,16 @@ jobs:
             umask 077
             printf '%s' "$SIGNING_KEYSTORE_ENC_BASE64" | base64 --decode |
               openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
-                -pass env:SIGNING_PASSPHRASE -out app/debug.keystore
-            test -s app/debug.keystore
-            echo "Encrypted signing material restored"
+                -pass env:SIGNING_PASSPHRASE -out "$RUNNER_TEMP/restored-signing.keystore"
+            test -s "$RUNNER_TEMP/restored-signing.keystore"
+            # Until the plaintext repository key is removed, require byte-for-byte
+            # equality so a different certificate cannot disrupt installed updates.
+            if [ -f app/debug.keystore ]; then
+              cmp -s app/debug.keystore "$RUNNER_TEMP/restored-signing.keystore" ||
+                { echo "::error::Encrypted keystore does not match existing signing identity"; exit 1; }
+            fi
+            cp "$RUNNER_TEMP/restored-signing.keystore" app/debug.keystore
+            echo "Encrypted signing material restored and validated"
           elif [ -z "$SIGNING_KEYSTORE_ENC_BASE64" ] && [ -z "$SIGNING_PASSPHRASE" ]; then
             # Temporary backwards-compatible path until migration secrets are configured.
             test -s app/debug.keystore || { echo "::error::Signing keystore missing"; exit 1; }
