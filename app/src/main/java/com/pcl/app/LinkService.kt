@@ -1630,7 +1630,7 @@ class LinkService : Service() {
         return when {
             digits.length >= 2 -> "number ending ${digits.takeLast(2)}"
             callName.isNotEmpty() -> "a saved contact"
-            else -> "unknown number"
+            else -> "caller details unavailable"
         }
     }
 
