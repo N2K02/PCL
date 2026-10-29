@@ -110,6 +110,8 @@ class CallsUi(
     val callState: String,
     val callDisplay: String,
     val simStatus: String?,
+    /** Verified SIM details; null when the Gateway cannot identify a unique line. */
+    val simIdentity: SimCallIdentity? = null,
     /** The SIM call was answered or placed on the Gateway itself. */
     val simOnGateway: Boolean,
     val whatsappStatus: String?,
@@ -243,6 +245,11 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                         fontWeight = FontWeight.SemiBold,
                     )
                     Text(ui.callDisplay, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ui.simIdentity?.let { sim ->
+                        Text(sim.description(), style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
                 }
             }
             if (ui.connected) {
