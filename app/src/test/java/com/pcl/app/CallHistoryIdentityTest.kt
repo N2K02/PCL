@@ -74,12 +74,11 @@ class CallHistoryIdentityTest {
         }
     }
 
-    @Test fun oldLegacyWhatsappTypeDoesNotInventCallerIdentity() {
-        val legacy = CallHistory.normalize(record(type = CallHistory.Type.WHATSAPP,
+    @Test fun retiredLegacyCallTypeCannotBeReintroducedIntoSimHistory() {
+        assertEquals(null, runCatching { CallHistory.Type.valueOf("WHATSAPP") }.getOrNull())
+        val legacy = CallHistory.normalize(record(type = CallHistory.Type.MISSED,
             name = "-", number = "-", whatsapp = true))
-        assertEquals("WhatsApp call",
-            CallerId.display(legacy.name, legacy.number,
-                CallerId.callSummary(legacy.type.name, "WhatsApp")))
+        assertTrue(!SimRecentsAnalytics.isSim(legacy))
     }
 
     @Test fun titleWithNoIdentityKeepsSourceSpecificSummary() {
