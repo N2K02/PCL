@@ -36,9 +36,10 @@ class CallHistoryIdentityTest {
         assertEquals(1_000L, clean.at)
     }
 
-    @Test fun numberInNameFieldIsNeverIncorrectlyStoredAsContact() {
+    @Test fun legacyNumberInNameFieldMovesToActualNumberInsteadOfBeingLost() {
         val clean = CallHistory.normalize(record(name = "+230 5123 4567", number = ""))
         assertEquals("", clean.name)
+        assertEquals("+230 5123 4567", clean.number)
     }
 
     @Test fun privateOnlyWhenNoActualNumberExists() {
