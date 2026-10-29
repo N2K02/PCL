@@ -56,10 +56,10 @@ class RecentCardIntegrationContractTest {
         val protocol = source("Protocol")
         assertTrue(protocol.contains("\"DIAL_SIM\""))
         assertTrue(link.contains("fun dialWithSim(number: String, name: String, slot: Int)"))
-        assertTrue(link.contains("SimDialAccounts.accountForSlot(this, selectedSlot)"))
+        assertTrue(link.contains("SimDialAccounts.select(this, selectedSlot)"))
         assertTrue(link.contains("extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, account)"))
         assertTrue(link.contains("if (account == null)"))
-        assertTrue(link.contains("callControlError = \"FAILED: Android cannot securely select SIM"))
+        assertTrue(link.contains("callControlError = \"FAILED: SIM"))
         assertTrue(link.contains("val slot = p.getOrNull(2)?.toIntOrNull()?.takeIf"))
     }
 
