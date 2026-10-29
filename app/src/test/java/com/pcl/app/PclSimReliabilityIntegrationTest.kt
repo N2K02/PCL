@@ -59,6 +59,7 @@ class PclSimReliabilityIntegrationTest {
         val service = source("LinkService")
         val history = source("CallHistory")
         assertTrue(service.contains("CallHistory.onLinkLost()"))
+        assertTrue(service.contains("if (role == ROLE_REMOTE) CallHistory.onLinkLost()"))
         assertTrue(history.contains("recovery.onDisconnect()"))
         assertTrue(history.contains("if (!recovery.shouldTrack(state)) return null"))
         assertTrue(service.contains("p.getOrNull(9)?.toLongOrNull()"))
