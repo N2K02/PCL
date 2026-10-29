@@ -38,7 +38,7 @@ object Protocol {
 object Commands {
     /** Sent by the Remote; handled only on the Gateway. */
     val GATEWAY_HANDLES = setOf(
-        "ANSWER", "REJECT", "HANGUP", "DIAL", "DIAL_SIM", "SYNC_CONTACTS",
+        "ANSWER", "REJECT", "HANGUP", "DIAL", "DIAL_SIM", "CALL_LOG_ACK", "SYNC_CONTACTS",
         "WHATSAPP_CHAT", "WHATSAPP_CALL", "NOTIF_DISMISS", "NOTIF_ACTION",
         "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY"
     )
