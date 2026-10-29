@@ -436,15 +436,15 @@ class LinkService : Service() {
     )
     private val thirdPartyRecents = ConcurrentHashMap<String, ThirdPartyRecent>()
 
-    private fun privateCallerLabel(value: String): Boolean = value.trim().lowercase() in
-        setOf("private number", "private caller", "no caller id", "withheld", "restricted", "anonymous")
+    private fun privateCallerLabel(value: String): Boolean = CallerId.isPrivate(value)
 
     private fun rememberThirdPartyRecent(key: String, pkg: String, app: String, title: String, state: String?) {
         if (WhatsAppCalls.isWhatsApp(pkg) || pkg.isBlank()) return
-        val label = title.trim().takeUnless {
-            it.isBlank() || it.equals(app, true) ||
-                it.lowercase() in setOf("unknown", "unknown number", "incoming call", "ongoing call", "call in progress")
-        }.orEmpty()
+        val label = when {
+            privateCallerLabel(title) -> CallerId.PRIVATE
+            title.trim().equals(app, true) -> ""
+            else -> CallerId.asNumber(title).ifEmpty { CallerId.asName(title) }
+        }
         val call = thirdPartyRecents.computeIfAbsent(key) {
             ThirdPartyRecent(pkg, app, label, System.currentTimeMillis(), state)
         }
@@ -455,17 +455,18 @@ class LinkService : Service() {
 
     private fun finishThirdPartyRecent(key: String) {
         val call = thirdPartyRecents.remove(key) ?: return
-        val label = if (privateCallerLabel(call.name)) "Private number" else call.name
-        val number = if (privateCallerLabel(label)) "" else if (label.count(Char::isDigit) >= 5 &&
-            label.all { it.isDigit() || it in "+ -()." }) label else numberForName(label)
-        val name = if (label == number) "" else label
+        val label = if (privateCallerLabel(call.name)) CallerId.PRIVATE else call.name
+        val number = if (privateCallerLabel(label)) "" else CallerId.asNumber(label)
+            .ifEmpty { numberForName(label) }
+        val name = if (privateCallerLabel(label)) CallerId.PRIVATE else CallerId.asName(label)
         val type = when {
             call.connectedAt != null -> CallHistory.Type.INCOMING
             call.state == WhatsAppCalls.RINGING -> CallHistory.Type.MISSED
             else -> CallHistory.Type.OUTGOING
         }
         val duration = call.connectedAt?.let { ((System.currentTimeMillis() - it) / 1000).coerceAtLeast(0) } ?: 0L
-        CallHistory.add(CallHistory.Record(number, name, type, call.startedAt, duration))
+        CallHistory.add(CallHistory.Record(number, name, type, call.startedAt, duration,
+            sourceApp = call.app))
         Hub.notifyUi()
     }
 
@@ -1100,17 +1101,21 @@ class LinkService : Service() {
                 val previousState = callState
                 callState = arg1.ifEmpty { CALL_IDLE }
                 if (callState == CALL_RINGING) callControlError = null
-                callNumber = p.getOrElse(2) { "" }.trim()
-                val receivedName = p.getOrElse(3) { "" }.trim()
-                // Generic dialer placeholders are not contact names. When the
-                // Gateway supplied a number, display that number on the Remote.
-                callName = receivedName.takeUnless {
-                    it.equals("Unknown number", ignoreCase = true) ||
-                        it.equals("Unknown", ignoreCase = true) ||
-                        it.equals("Incoming call", ignoreCase = true) ||
-                        it.equals("Private number", ignoreCase = true) ||
-                        it.equals("No caller ID", ignoreCase = true)
-                }.orEmpty()
+                callNumber = CallerId.asNumber(p.getOrElse(2) { "" })
+                val receivedName = p.getOrElse(3) { "" }
+                // Withheld is a real caller state, unlike "unknown". Preserve
+                // it across the Gateway/Remote link, but never invent a number.
+                callName = CallerId.asName(receivedName).ifEmpty {
+                    if (callNumber.isEmpty() && CallerId.isPrivate(receivedName)) CallerId.PRIVATE
+                    else ""
+                }
+                if (callNumber.isEmpty() && callName.isNotEmpty() &&
+                    !CallerId.isPrivate(callName)) {
+                    callNumber = numberForName(callName)
+                }
+                if (callName.isEmpty() && callNumber.isNotEmpty()) {
+                    callName = CallerId.asName(lookupName(callNumber))
+                }
                 callDirection = p.getOrElse(4) { "" }
                 CallHistory.onSimState(callState, callNumber, callName)
                     ?.takeIf { it.type == CallHistory.Type.MISSED }
@@ -1292,9 +1297,10 @@ class LinkService : Service() {
             else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "OUTGOING" }
             else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
             val gotNumber = !num.isNullOrEmpty() && num != callNumber
-            if (!num.isNullOrEmpty()) {
-                callNumber = num
-                callName = lookupName(num)
+            val verifiedNumber = CallerId.asNumber(num)
+            if (verifiedNumber.isNotEmpty()) {
+                callNumber = verifiedNumber
+                callName = CallerId.asName(lookupName(verifiedNumber))
             }
             val changed = newState != callState
             if (changed && newState == CALL_RINGING) callControlError = null
@@ -1361,8 +1367,10 @@ class LinkService : Service() {
 
     fun updateCallerFromNotification(number: String, name: String) {
         if (role != ROLE_GATEWAY || callState == CALL_IDLE) return
-        val safeNumber = number.trim().take(80)
-        val safeName = name.trim().take(120)
+        val safeNumber = CallerId.asNumber(number.take(80))
+        val safeName = CallerId.asName(name.take(120)).ifEmpty {
+            if (CallerId.isPrivate(name)) CallerId.PRIVATE else ""
+        }
         if (safeNumber.isEmpty() && safeName.isEmpty()) return
         if (safeNumber.isNotEmpty() && callNumber.isNotEmpty() &&
             !numbersMatch(callNumber, safeNumber)) return
@@ -1372,9 +1380,8 @@ class LinkService : Service() {
             changed = true
         }
         if (callName.isEmpty() && safeName.isNotEmpty() &&
-            (privateCallerLabel(safeName) || safeName.lowercase() !in setOf("unknown", "unknown number", "incoming call",
-                "ongoing call", "phone"))) {
-            callName = if (privateCallerLabel(safeName)) "Private number" else safeName
+            (!privateCallerLabel(safeName) || callNumber.isEmpty())) {
+            callName = safeName
             changed = true
         }
         if (callNumber.isEmpty() && callName.isNotBlank()) {
@@ -1398,7 +1405,7 @@ class LinkService : Service() {
      * Never infer a number from a partial name or an ambiguous set of contacts.
      */
     private fun resolveUniqueContactNumber(name: String): String {
-        if (name.isBlank() || !has(Manifest.permission.READ_CONTACTS)) return ""
+        if (CallerId.asName(name).isBlank() || !has(Manifest.permission.READ_CONTACTS)) return ""
         fun normalize(value: String): String = java.text.Normalizer
             .normalize(value, java.text.Normalizer.Form.NFKC)
             .trim().replace(Regex("\\s+"), " ")
@@ -1412,10 +1419,10 @@ class LinkService : Service() {
         val matches = if (exact.isNotEmpty()) exact else contacts.filter {
             normalize(it.name) == target
         }
-        val numbers = matches.map { ContactStore.digits(it.number) }
-            .filter { it.isNotBlank() }.distinct()
-        if (numbers.size > 1) Hub.log("Caller label matches multiple contact numbers; leaving number unknown")
-        return if (numbers.size == 1) matches.first().number else ""
+        val resolved = CallerId.numberForName(name, matches)
+        if (resolved.isEmpty() && matches.size > 1)
+            Hub.log("Caller label matches multiple contact numbers; not inferring a number")
+        return resolved
     }
 
     private fun sendCallState() {
@@ -1556,7 +1563,7 @@ class LinkService : Service() {
     }
 
     private fun lookupName(number: String): String {
-        if (!has(Manifest.permission.READ_CONTACTS)) return ""
+        if (CallerId.asNumber(number).isEmpty() || !has(Manifest.permission.READ_CONTACTS)) return ""
         return try {
             val uri = Uri.withAppendedPath(
                 ContactsContract.PhoneLookup.CONTENT_FILTER_URI, Uri.encode(number)
@@ -1582,12 +1589,12 @@ class LinkService : Service() {
         }
     }
 
-    fun display(): String = when {
-        callName.isNotEmpty() && callNumber.isNotEmpty() -> "$callName ($callNumber)"
-        callName.isNotEmpty() -> callName
-        callNumber.isNotEmpty() -> callNumber
-        else -> "Unknown number"
-    }
+    fun display(): String = CallerId.displayWithNumber(
+        callName, callNumber,
+        CallerId.callSummary(callDirection.ifBlank {
+            if (callState == CALL_RINGING) "INCOMING" else ""
+        }, "SIM"),
+    )
 
     // ---------------------------------------------------------------- remote: ringing
 
@@ -1843,7 +1850,9 @@ class LinkService : Service() {
             else -> mirroredCalls[encKey]?.connectedAt ?: if (state == WhatsAppCalls.ACTIVE) now else null
         }
         val buttons = (0 until minOf(3, actionIndices.size, actionLabels.size)).map { actionIndices[it] to actionLabels[it] }
-        mirroredCalls[encKey] = MirrorCall(encKey, pkg, app, title.ifEmpty { app }, ringing, connectedAt, buttons)
+        val safeTitle = CallerId.display(title, title,
+            CallerId.callSummary(if (ringing) "INCOMING" else "", app))
+        mirroredCalls[encKey] = MirrorCall(encKey, pkg, app, safeTitle, ringing, connectedAt, buttons)
 
         val deletePi = PendingIntent.getService(this, id, Intent(this, LinkService::class.java).setAction(ACTION_NOTIF_DISMISSED).putExtra(EXTRA_KEY, encKey), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         // The calls channel is silent: PCL plays the ringtone itself while it rings.
@@ -1911,7 +1920,7 @@ class LinkService : Service() {
 
     /** A synced (or this phone's) contact's number by exact name, or "". */
     private fun numberForName(name: String): String =
-        if (name.isBlank()) "" else ContactStore.all(this).firstOrNull { it.name.equals(name, ignoreCase = true) }?.number.orEmpty()
+        CallerId.numberForName(name, ContactStore.all(this))
 
     // ---------------------------------------------------------------- notifications
 
@@ -1994,7 +2003,9 @@ class LinkService : Service() {
 
     /** Remote: a Gateway call (SIM or WhatsApp) rang and nobody answered. */
     private fun showMissedCall(call: CallHistory.Record) {
-        val who = call.name.ifEmpty { call.number.ifEmpty { "Unknown number" } }
+        val who = CallerId.display(call.name, call.number,
+            CallerId.callSummary(call.type.name, call.sourceApp ?:
+                if (call.whatsapp) "WhatsApp" else "SIM"))
         val open = openCallsPi()
         val builder = Notification.Builder(this, CH_CALLS)
             .setSmallIcon(android.R.drawable.stat_notify_missed_call)
