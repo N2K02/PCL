@@ -174,6 +174,28 @@ object CallHistory {
         setUnseen(0)
     }
 
+    /**
+     * Delete only one selected local history item. Never affect Android's
+     * device call log or synced Gateway contacts.
+     */
+    internal fun withoutOne(list: List<Record>, selected: Record): List<Record>? {
+        val byReference = list.indexOfFirst { it === selected }
+        val index = if (byReference >= 0) byReference else {
+            val matches = list.indices.filter { list[it] == selected }
+            matches.singleOrNull() ?: return null
+        }
+        return list.toMutableList().apply { removeAt(index) }
+    }
+
+    @Synchronized
+    fun remove(record: Record): Boolean {
+        if (!loaded) return false
+        val updated = withoutOne(_records.value, record) ?: return false
+        _records.value = updated
+        save(updated)
+        return true
+    }
+
     /** Update only the unique recently-ended SIM call. Never touch VoIP or
      *  assume an arbitrary row in Recents is the matching telephone call.
      */
