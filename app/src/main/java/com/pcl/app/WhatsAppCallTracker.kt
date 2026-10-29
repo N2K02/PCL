@@ -60,18 +60,16 @@ class WhatsAppCallTracker(
     @Synchronized
     fun onCaller(pkg: String, title: String) {
         val call = calls[pkg] ?: return
-        val label = title.trim()
-        if (label.isBlank() || label.equals("WhatsApp", true) ||
-            label.equals("WhatsApp Business", true) ||
-            label.equals("Incoming call", true) ||
-            label.equals("Ongoing call", true) ||
-            label.equals("Call in progress", true) ||
-            label.equals("Unknown", true) ||
-            label == call.name || (call.here && call.name.isNotEmpty())) return
-        call.name = label
-        val digits = label.filter { it.isDigit() }
-        call.number = if (digits.length >= 7 && label.all { it.isDigit() || it in "+ -()" }) label
-        else numberFor(call.name).ifEmpty { call.number }
+        val raw = CallerId.clean(title)
+        val label = when {
+            CallerId.isPrivate(raw) -> CallerId.PRIVATE
+            else -> CallerId.asNumber(raw).ifEmpty { CallerId.asName(raw) }
+        }
+        if (label.isBlank() || label == call.name ||
+            (call.here && call.name.isNotEmpty())) return
+        call.name = if (CallerId.asNumber(label).isNotEmpty()) "" else label
+        call.number = if (CallerId.isPrivate(label)) "" else
+            CallerId.asNumber(label).ifEmpty { numberFor(call.name).ifEmpty { call.number } }
     }
 
     /** False when the Gateway took [pkg]'s call: this phone then shows nothing for it. */
