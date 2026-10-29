@@ -63,7 +63,7 @@ The Remote has a **Calls** tab next to Home, laid out like a phone's dialer:
 - **Keypad.** A dial pad with key tones (when the ringer is on) and haptics. Hold **0** for **+**, tap ⌫ to delete and hold it to clear, and long-press the number to paste one. Typing on the keys also searches contacts by name, like a phone's smart dial: 5‑6‑2 finds "Joan". Below the keys: **SIM call** (through the Gateway's SIM).
 - **Recents.** SIM calls on the Gateway, grouped by day: incoming, outgoing (with talk time), missed and declined. Missed calls show as a badge on the Calls icon until you open Recents. The list stays on the Remote only; **Clear** empties it.
 - **Contacts.** Search the synced contacts, sync again, and star **favourites**. Favourites appear at the top of Contacts and above the keypad.
-- Tap any person in Recents or Contacts for **Favourite** and **Edit** (put the number on the keypad); the green phone icon calls straight away.
+- Tap a call in **Recents** to reveal Favourite, Edit, Copy, Share, Delete and verified SIM-selection actions; the phone icon calls immediately. Tap a person in **Contacts** for Favourite and Edit.
 - While a SIM call rings or is connected, the top of the tab shows it with **Answer / Decline** or **Hang up** and a call timer. Tapping a call notification opens this tab, and on a locked Remote a ringing call opens it straight away.
 
 Android only lets the phone's own dialer send keypad tones into a call, so PCL can't press keys in a menu ("press 1") on the Gateway's call.

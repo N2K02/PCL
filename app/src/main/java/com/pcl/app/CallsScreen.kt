@@ -514,11 +514,14 @@ private fun StatusLine(ui: CallsUi) {
 @Composable
 private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onEdit: (String) -> Unit) {
     val records by CallHistory.records.collectAsState()
+    val context = LocalContext.current
     var simFilter by rememberSaveable { mutableStateOf(SimRecentsAnalytics.Filter.ALL.name) }
+    var expandedRecent by rememberSaveable { mutableStateOf("") }
     val selectedFilter = SimRecentsAnalytics.Filter.entries.firstOrNull { it.name == simFilter }
         ?: SimRecentsAnalytics.Filter.ALL
     val shownRecords = SimRecentsAnalytics.filter(records, selectedFilter)
     var confirmClear by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<CallHistory.Record?>(null) }
 
     if (records.isEmpty()) {
         EmptyState(Icons.Default.History, "No calls yet", "Calls you make or get through the Gateway show up here.")
@@ -543,59 +546,90 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             }
         }
         var lastDay = ""
-        shownRecords.forEachIndexed { index, r ->
-            val day = dayLabel(r.at)
+        shownRecords.forEachIndexed { index, record ->
+            val day = dayLabel(record.at)
             if (day != lastDay) {
                 lastDay = day
                 item(key = "day-$index") {
-                    Text(day, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                    Text(day, style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                 }
             }
-            item(key = "call-$index-${r.at}") {
-                val name = r.name.ifEmpty { names.exact(r.number)?.name.orEmpty() }
-                ListItem(
-                    headlineContent = {
-                        Text(name.ifEmpty { r.number.ifEmpty { "Unknown number" } },
-                            color = if (r.type == CallHistory.Type.MISSED) MaterialTheme.colorScheme.error
-                                else MaterialTheme.colorScheme.onSurface)
-                    },
-                    supportingContent = {
-                        Text(buildString {
-                            append(typeLabel(r.type))
-                            append(" · ")
-                            append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
-                            if (r.durationSec > 0) append(" · ").append(duration(r.durationSec))
-                            append(" · ").append(r.simIdentity?.description() ?: "SIM")
-                            if (name.isNotEmpty() && r.number.isNotEmpty()) append(" · ").append(r.number)
-                        })
-                    },
-                    leadingContent = {
-                        Icon(typeIcon(r.type), contentDescription = typeLabel(r.type),
-                            tint = if (r.type == CallHistory.Type.MISSED || r.type == CallHistory.Type.DECLINED)
-                                MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
-                    },
-                    trailingContent = {
-                        val flags = RecentCallActionsPolicy.availability(
-                            r, ui.connected, ui.callState == LinkService.CALL_IDLE, ui.availableSimSlots)
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (flags.quickCall) {
-                            IconButton(
-                                onClick = { actions.simCall(r.number, name) },
-                                enabled = flags.quickCall,
-                            ) {
-                                Icon(Icons.Default.Call, contentDescription = "Call ${r.number}",
-                                    tint = MaterialTheme.colorScheme.primary)
+            item(key = "call-$index-${record.at}") {
+                val name = record.name.ifEmpty { names.exact(record.number)?.name.orEmpty() }
+                val flags = RecentCallActionsPolicy.availability(
+                    record, ui.connected, ui.callState == LinkService.CALL_IDLE, ui.availableSimSlots)
+                val key = "$index-${record.at}"
+                Column {
+                    ListItem(
+                        modifier = Modifier.clickable {
+                            expandedRecent = if (expandedRecent == key) "" else key
+                        },
+                        headlineContent = {
+                            Text(name.ifEmpty { record.number.ifEmpty { "Unknown number" } },
+                                color = if (record.type == CallHistory.Type.MISSED)
+                                    MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                        },
+                        supportingContent = {
+                            Text(buildString {
+                                append(typeLabel(record.type))
+                                append(" · ").append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(record.at)))
+                                if (record.durationSec > 0) append(" · ").append(duration(record.durationSec))
+                                append(" · ").append(record.simIdentity?.description() ?: "SIM")
+                                if (name.isNotEmpty() && record.number.isNotEmpty())
+                                    append(" · ").append(record.number)
+                            })
+                        },
+                        leadingContent = {
+                            Icon(typeIcon(record.type), contentDescription = typeLabel(record.type),
+                                tint = if (record.type == CallHistory.Type.MISSED || record.type == CallHistory.Type.DECLINED)
+                                    MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            if (flags.quickCall) {
+                                IconButton(onClick = { actions.simCall(record.number, name) }) {
+                                    Icon(Icons.Default.Call, contentDescription = "Call ${record.number}",
+                                        tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        },
+                    )
+                    AnimatedVisibility(visible = expandedRecent == key) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                TextButton(onClick = { Favourites.toggle(Contact(name, record.number)) },
+                                    enabled = flags.contact) {
+                                    Text(if (Favourites.isFavourite(record.number)) "Unstar" else "Favourite")
+                                }
+                                TextButton(onClick = { onEdit(record.number) }, enabled = flags.copy) {
+                                    Text("Edit")
+                                }
+                                TextButton(onClick = {
+                                    context.getSystemService(android.content.ClipboardManager::class.java)
+                                        ?.setPrimaryClip(android.content.ClipData.newPlainText("Phone number", record.number))
+                                }, enabled = flags.copy) { Text("Copy") }
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                if (flags.simOne) TextButton(onClick = {
+                                    actions.simCallFromSlot(record.number, name, 0)
+                                }) { Text("SIM 1") }
+                                if (flags.simTwo) TextButton(onClick = {
+                                    actions.simCallFromSlot(record.number, name, 1)
+                                }) { Text("SIM 2") }
+                                TextButton(onClick = {
+                                    RecentCallActionsPolicy.share(record, name)?.let { share ->
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
+                                            .setType("text/plain")
+                                            .putExtra(android.content.Intent.EXTRA_TEXT, share)
+                                        context.startActivity(android.content.Intent.createChooser(intent, "Share call details"))
+                                    }
+                                }, enabled = flags.share) { Text("Share") }
+                                TextButton(onClick = { confirmDelete = record }) { Text("Delete") }
                             }
                         }
-                        if (flags.simOne) TextButton(onClick = {
-                            actions.simCallFromSlot(r.number, name, 0)
-                        }) { Text("SIM 1") }
-                        if (flags.simTwo) TextButton(onClick = {
-                            actions.simCallFromSlot(r.number, name, 1)
-                        }) { Text("SIM 2") }
-                        }
-                    },
-                )
+                    }
+                }
             }
         }
     }
@@ -606,6 +640,18 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             text = { Text("This removes the list on this phone only. The Gateway's own call log isn't touched.") },
             confirmButton = { TextButton(onClick = { CallHistory.clearSim(); confirmClear = false }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+        )
+    }
+    confirmDelete?.let { selected ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Delete recent call?") },
+            text = { Text("Only this local history entry will be removed.") },
+            confirmButton = { TextButton(onClick = {
+                CallHistory.remove(selected)
+                confirmDelete = null
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
         )
     }
 }
