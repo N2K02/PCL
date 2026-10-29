@@ -84,6 +84,15 @@ object Hub {
     fun log(msg: String) {
         android.util.Log.i("PCL", msg)
         CallLogger.log(msg)
+        // Persistent diagnostics are opt-in and redact personally identifying data.
+        val safeEvent = when {
+            msg.startsWith("Connected to ") -> "Connected to selected Bluetooth peer"
+            msg.startsWith("Connecting to ") -> "Connecting to selected Bluetooth peer"
+            msg.startsWith("Waiting for ") -> "Waiting for selected Bluetooth peer"
+            msg.startsWith("Refused Bluetooth connection from ") -> "Rejected unselected Bluetooth peer"
+            else -> msg
+        }
+        AppLog.add("LINK", safeEvent)
         notifyUi()
     }
 

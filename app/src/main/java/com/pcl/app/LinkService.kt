@@ -413,6 +413,11 @@ class LinkService : Service() {
     @Volatile private var writer: FrameWriter? = null
     private var worker: Thread? = null
     private val io = Executors.newSingleThreadExecutor()
+    // Contacts and telecom providers can block for seconds on some OEMs. Do not
+    // query them on the Bluetooth reader or the phone-state broadcast thread.
+    private val contactsExecutor = Executors.newSingleThreadExecutor()
+    private val phoneDataExecutor = Executors.newSingleThreadExecutor()
+    @Volatile private var verifiedSimSlots: Set<Int> = emptySet()
     // Optional CallLog I/O must never delay Bluetooth command processing.
     private val callLogExecutor = ThreadPoolExecutor(
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(8))
@@ -440,12 +445,15 @@ class LinkService : Service() {
         super.onCreate()
         Hub.service = this
         CallHistory.init(this)
+        AppLog.init(this)
         createChannels()
     }
 
     override fun onDestroy() {
         shutdown()
         io.shutdownNow()
+        contactsExecutor.shutdownNow()
+        phoneDataExecutor.shutdownNow()
         callLogExecutor.shutdownNow()
         Hub.service = null
         Hub.notifyUi()
@@ -858,6 +866,7 @@ class LinkService : Service() {
         clearPendingCall()
         clearPendingAudioRequests()
         stopRinging()
+        verifiedSimSlots = emptySet()
         if (receiverRegistered) {
             try {
                 unregisterReceiver(phoneReceiver)
@@ -1199,12 +1208,11 @@ class LinkService : Service() {
             else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
             val gotNumber = !num.isNullOrEmpty() && num != callNumber
             if (!num.isNullOrEmpty()) {
-                callNumber = num
-                callName = lookupName(num)
+                callNumber = CallerId.asNumber(num)
+                // Contact and subscription providers run asynchronously.
             }
             val changed = newState != callState
-            if (newState != CALL_IDLE && (changed || callSimIdentity == null))
-                callSimIdentity = SimCallDetector.identify(this@LinkService, newState)
+            if (changed || callSimIdentity == null) refreshPhoneDetails(newState, callNumber)
             if (changed && newState == CALL_RINGING) callControlError = null
             callState = newState
             if (changed || gotNumber) {
@@ -1278,6 +1286,7 @@ class LinkService : Service() {
                 TelephonyManager.CALL_STATE_OFFHOOK -> CALL_OFFHOOK
                 else -> CALL_IDLE
             }
+            refreshPhoneDetails(current)
             if (current != callState) {
                 callState = current
                 // A snapshot cannot reliably identify call direction or caller number.
@@ -1289,6 +1298,38 @@ class LinkService : Service() {
         } catch (e: Exception) {
             Hub.log("Initial phone-state query unavailable: ${e.message ?: e.javaClass.simpleName}")
         }
+    }
+
+    /** Read potentially slow telecom and contact providers off the broadcast thread. */
+    private fun refreshPhoneDetails(state: String, number: String = callNumber) {
+        if (role != ROLE_GATEWAY || !running) return
+        val gen = generation
+        try {
+            phoneDataExecutor.execute {
+                val sim = SimCallDetector.identify(this, state)
+                val name = if (number.isNotBlank()) lookupName(number) else ""
+                val slots = SimDialAccounts.availableSlots(this)
+                trafficHandler.post {
+                    if (!running || generation != gen || role != ROLE_GATEWAY) return@post
+                    verifiedSimSlots = slots
+                    if (callState == state) {
+                        var changed = false
+                        if (state != CALL_IDLE && callNumber == number) {
+                            if (sim != null && callSimIdentity != sim) {
+                                callSimIdentity = sim
+                                changed = true
+                            }
+                            if (name.isNotBlank() && callName != name) {
+                                callName = name
+                                changed = true
+                            }
+                        }
+                        // Send verified available SIMs after the provider query completes.
+                        if (changed || writer != null) sendCallState()
+                    }
+                }
+            }
+        } catch (_: RejectedExecutionException) { /* Service is shutting down. */ }
     }
 
     /** Gateway: enrich an active SIM call using metadata from the default dialer's notification. */
@@ -1375,7 +1416,7 @@ class LinkService : Service() {
             send("CALL", callState, callNumber, callName, callDirection,
                 sim?.slotIndex?.toString().orEmpty(), encodeText(sim?.displayName.orEmpty()),
                 encodeText(sim?.carrier.orEmpty()),
-                SimDialAccounts.availableSlots(this).sorted().joinToString(","),
+                verifiedSimSlots.sorted().joinToString(","),
                 (completedStart ?: simCallStartedMs).takeIf { it > 0L }?.toString().orEmpty())
         }
     }
@@ -1609,9 +1650,17 @@ class LinkService : Service() {
             Hub.log("Contacts permission missing – Remote keeps its saved contacts")
             return
         }
-        val list = ContactStore.readDevice(this)
-        val data = ContactStore.toChunks(list).joinToString("")
-        send("CONTACTS_HASH", ContactStore.fingerprint(data), list.size.toString())
+        val gen = generation
+        val w = writer ?: return
+        try {
+            contactsExecutor.execute {
+                val list = ContactStore.readDevice(this)
+                val data = ContactStore.toChunks(list).joinToString("")
+                if (running && gen == generation && writer === w) {
+                    send("CONTACTS_HASH", ContactStore.fingerprint(data), list.size.toString())
+                }
+            }
+        } catch (_: RejectedExecutionException) { /* Quitting. */ }
     }
 
     /** Gateway: send the full contact list (on request from the Remote). */
@@ -1622,29 +1671,42 @@ class LinkService : Service() {
             return
         }
         if (!has(Manifest.permission.READ_CONTACTS)) {
-            Hub.log("Contacts permission missing – contacts not sent to Remote")
             send("CONTACTS_RESULT", "FAILED", "Contacts permission is not granted on Gateway")
             return
         }
-        val list = ContactStore.readDevice(this)
-        val chunks = ContactStore.toChunks(list)
+        val gen = generation
         try {
-            io.execute {
-                try {
-                    val frames = listOf("CONTACTS_BEGIN") + chunks.map { "CONTACTS|$it" } +
-                        listOf("CONTACTS_END", "CONTACTS_RESULT|OK|${list.size}")
-                    for (frame in frames) {
-                        w.writeCmd(frame)
-                        txTotal.addAndGet(frame.toByteArray(Charsets.UTF_8).size.toLong() + 5L)
+            contactsExecutor.execute {
+                val list = ContactStore.readDevice(this)
+                val frames = listOf("CONTACTS_BEGIN") +
+                    ContactStore.toChunks(list).map { "CONTACTS|$it" } +
+                    listOf("CONTACTS_END", "CONTACTS_RESULT|OK|${list.size}")
+                if (!running || gen != generation || writer !== w) return@execute
+                // Yield the serial writer after two frames; urgent ANSWER, REJECT,
+                // HANGUP and DIAL requests can be queued between contact batches.
+                val cursor = frames.iterator()
+                val sender = object : Runnable {
+                    override fun run() {
+                        if (!running || gen != generation || writer !== w) return
+                        try {
+                            repeat(2) {
+                                if (!cursor.hasNext()) return@repeat
+                                val frame = cursor.next()
+                                w.writeCmd(frame)
+                                txTotal.addAndGet(frame.toByteArray(Charsets.UTF_8).size.toLong() + 5L)
+                            }
+                            if (cursor.hasNext()) io.execute(this)
+                            else Hub.log("Sent ${list.size} contacts to Remote")
+                        } catch (e: Exception) {
+                            Hub.log("Contact sync failed: ${e.javaClass.simpleName}")
+                            if (writer === w) closeSocket()
+                        }
                     }
-                    Hub.log("Sent ${list.size} contacts to Remote")
-                } catch (e: Exception) {
-                    Hub.log("Contacts sync failed: ${e.message}")
                 }
+                try { io.execute(sender) }
+                catch (_: RejectedExecutionException) { /* Quitting. */ }
             }
-        } catch (e: Exception) {
-            Hub.log("Could not queue contact sync: ${e.message}")
-        }
+        } catch (_: RejectedExecutionException) { /* Quitting. */ }
     }
 
     // ---------------------------------------------------------------- notifications
