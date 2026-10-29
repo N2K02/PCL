@@ -29,7 +29,8 @@ class CallerPresentationIntegrationContractTest {
         assertTrue(history.contains("normalize(Record("))
         assertTrue(history.contains("val canonical = normalize(record)"))
         assertTrue(history.contains("val number = CallerId.asNumber(record.number)"))
-        assertTrue(ui.contains("title = CallerId.display("))
+        assertTrue(ui.contains("RecentCallCard("))
+        assertTrue(source("RecentCallCard").contains("RecentCallActionsPolicy.title(record, lookedUpName)"))
         assertTrue(ui.contains("CallerId.callSummary(r.type.name, source)"))
         assertFalse(ui.contains("r.number.ifEmpty { \"Unknown number\" }"))
     }
