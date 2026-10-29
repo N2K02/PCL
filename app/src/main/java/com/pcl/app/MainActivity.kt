@@ -265,7 +265,7 @@ class MainActivity : ComponentActivity() {
                                     MainTab.HOME -> Icons.Default.Hub
                                     MainTab.CALLS -> Icons.Default.Call
                                     MainTab.UPDATE -> Icons.Default.Download
-                                    MainTab.LOGS -> Icons.Default.BugReport
+                                    MainTab.LOGS -> Icons.Default.Settings
                                     MainTab.SETTINGS -> if (showingPermissions) Icons.Default.CheckCircle else Icons.Default.Settings
                                 },
                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
