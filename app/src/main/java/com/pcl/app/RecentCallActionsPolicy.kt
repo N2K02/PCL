@@ -35,7 +35,9 @@ internal object RecentCallActionsPolicy {
     }
 
     fun title(record: CallHistory.Record, lookedUpName: String?): String {
-        val source = RecentCallPresentation.source(record.sourceApp, record.whatsapp, record.simIdentity)
+        val source = if (SimRecentsAnalytics.isSim(record))
+            record.simIdentity?.badge() ?: "SIM"
+        else RecentCallPresentation.source(record.sourceApp, record.whatsapp, record.simIdentity)
         return CallerId.display(
             CallerId.asName(record.name).ifEmpty { CallerId.asName(lookedUpName) }
                 .ifEmpty { record.name },
