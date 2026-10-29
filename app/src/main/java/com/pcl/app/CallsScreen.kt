@@ -112,6 +112,7 @@ class CallsUi(
     val simStatus: String?,
     /** Verified SIM details; null when the Gateway cannot identify a unique line. */
     val simIdentity: SimCallIdentity? = null,
+    val availableSimSlots: Set<Int> = emptySet(),
     /** The SIM call was answered or placed on the Gateway itself. */
     val simOnGateway: Boolean,
     val whatsappStatus: String?,
