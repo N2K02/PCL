@@ -32,10 +32,16 @@ android {
 
     signingConfigs {
         getByName("debug") {
-            storeFile = file("debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+            // Distribution restores the original keystore before Gradle configures the
+            // project. PR checks without that private file use AGP's ordinary debug
+            // signing identity instead of failing validation.
+            val distributionKeystore = file("debug.keystore")
+            if (distributionKeystore.isFile) {
+                storeFile = distributionKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
