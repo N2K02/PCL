@@ -80,7 +80,7 @@ class SimOnlyContractTest {
         assertTrue(recents.contains("CallHistory.clearSim()"))
         assertFalse(recents.contains("PersonRow("))
         assertFalse(recents.contains("onToggle"))
-        assertTrue(recents.contains("RecentCallNumber.isDialable(r.number)"))
+        assertTrue(recents.contains("RecentCallActionsPolicy.availability("))
         assertTrue(recents.contains("actions.simCall(r.number, name)"))
         assertTrue(recents.contains("enabled = flags.quickCall"))
     }
