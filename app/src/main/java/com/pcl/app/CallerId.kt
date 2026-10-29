@@ -128,13 +128,19 @@ object CallerId {
 
     /** True when two numbers are the same line whatever their format or country prefix. */
     fun sameNumber(first: String, second: String): Boolean {
-        val a = first.filter(Char::isDigit)
-        val b = second.filter(Char::isDigit)
-        if (a.isEmpty() || b.isEmpty()) return false
+        fun digits(value: String) =
+            clean(value).replace("(0)", "").filter(Char::isDigit)
+        val a = digits(first)
+        val b = digits(second)
+        if (a.length < 5 || b.length < 5) return false
         if (a == b) return true
-        // A national number (leading 0 dropped) inside an international one: compare the tail.
-        val tail = minOf(a.length, b.length, 9)
-        return tail >= 7 && a.takeLast(tail) == b.takeLast(tail)
+        val (shorter, longer) = if (a.length < b.length) a to b else b to a
+        // Do not treat equal-length numbers with differing country prefixes
+        // as the same person. Only match full national/international suffixes.
+        if (shorter.length == longer.length ||
+            longer.length - shorter.length !in 1..4) return false
+        val national = shorter.removePrefix("0")
+        return national.length >= 7 && longer.endsWith(national)
     }
 
     /**
