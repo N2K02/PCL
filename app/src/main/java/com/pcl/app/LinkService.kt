@@ -1693,6 +1693,10 @@ class LinkService : Service() {
         try {
             val extras = Bundle()
             if (selectedSlot != null) {
+                if (callState != CALL_IDLE) {
+                    callControlError = "FAILED: A SIM call is already active"
+                    return
+                }
                 val account = SimDialAccounts.accountForSlot(this, selectedSlot)
                 if (account == null) {
                     callControlError = "FAILED: Android cannot securely select SIM ${selectedSlot + 1}"
