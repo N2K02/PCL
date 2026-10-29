@@ -57,7 +57,7 @@ class SimOnlyContractTest {
         val service = source("app/src/main/java/com/pcl/app/LinkService.kt")
         val protocol = source("app/src/main/java/com/pcl/app/Protocol.kt")
         val screen = source("app/src/main/java/com/pcl/app/CallsScreen.kt")
-        assertTrue(protocol.contains("const val VERSION = 8"))
+        assertTrue(protocol.contains("const val VERSION = 9"))
         assertTrue(protocol.contains("\"AUDIO_MODE\""))
         listOf("\"AUTO\"", "\"CALL\"", "\"MEDIA\"", "\"RING\"").forEach {
             assertTrue(service.contains(it))
@@ -77,12 +77,12 @@ class SimOnlyContractTest {
             .substringBefore("// ---------------------------------------------------------------- contacts")
         assertTrue(recents.contains("ListItem("))
         assertTrue(recents.contains("Clear call history?"))
-        assertTrue(recents.contains("CallHistory.clear()"))
+        assertTrue(recents.contains("CallHistory.clearSim()"))
         assertFalse(recents.contains("PersonRow("))
         assertFalse(recents.contains("onToggle"))
         assertTrue(recents.contains("RecentCallNumber.isDialable(r.number)"))
         assertTrue(recents.contains("actions.simCall(r.number, name)"))
-        assertTrue(recents.contains("enabled = ui.connected"))
+        assertTrue(recents.contains("enabled = flags.quickCall"))
     }
 
     @Test fun manifestAndSettingsRequireNoNotificationListenerOrAccessibility() {
