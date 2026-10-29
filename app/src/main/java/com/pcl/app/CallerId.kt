@@ -85,6 +85,17 @@ object CallerId {
         }
     }
 
+    /** Live SIM calls historically showed name and number together. Keep that
+     *  detail when both are genuine, without exposing placeholder values. */
+    fun displayWithNumber(name: String?, number: String?, fallback: String): String {
+        val realName = asName(name)
+        val realNumber = asNumber(number)
+        return when {
+            realName.isNotEmpty() && realNumber.isNotEmpty() -> "$realName ($realNumber)"
+            else -> display(name, number, fallback)
+        }
+    }
+
     /** A useful non-identifying label when Android did not expose the caller. */
     fun callSummary(kind: String, source: String = "SIM"): String {
         val action = when (kind.trim().uppercase(Locale.ROOT)) {
