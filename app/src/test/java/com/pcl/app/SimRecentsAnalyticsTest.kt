@@ -23,8 +23,12 @@ class SimRecentsAnalyticsTest {
         r(CallHistory.Type.WHATSAPP),
     )
 
-    @Test fun allShowsAllCallsIncludingThirdPartyHistory() {
-        assertEquals(10, SimRecentsAnalytics.filter(calls, SimRecentsAnalytics.Filter.ALL).size)
+    @Test fun allShowsOnlySimCallsAndPreservesLegacyDataOutsideRecents() {
+        assertEquals(7, SimRecentsAnalytics.filter(calls, SimRecentsAnalytics.Filter.ALL).size)
+        assertEquals(10, calls.size)
+        assertFalse(SimRecentsAnalytics.matches(calls[7], SimRecentsAnalytics.Filter.ALL))
+        assertFalse(SimRecentsAnalytics.matches(calls[8], SimRecentsAnalytics.Filter.ALL))
+        assertFalse(SimRecentsAnalytics.matches(calls[9], SimRecentsAnalytics.Filter.ALL))
     }
 
     @Test fun simOneAndSimTwoExcludeOtherSimAndAllVoip() {
