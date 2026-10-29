@@ -579,7 +579,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (screen == MainTab.HOME && setupReady) ActivityLogCard()
                 if (screen == MainTab.HOME && !setupReady) {
                     Text("Complete setup first", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                     SectionCard(title = "Home locked", subtitle = "Grant the required permissions in Settings to enable the connection controls.") {
@@ -628,51 +627,6 @@ class MainActivity : ComponentActivity() {
                     }
                     
                     Text("PCL • Material 3 Expressive", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivityLogCard() {
-    val context = LocalContext.current
-    val lines by CallLogger.lines.collectAsState()
-    SectionCard(title = "Activity logs", subtitle = "Latest ${lines.size}/100 lines. Newest entries appear first.") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
-                onClick = {
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("PCL activity logs", lines.asReversed().joinToString("\n")))
-                    CallLogger.log("Activity logs copied")
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                Spacer(Modifier.width(5.dp))
-                Text("Copy")
-            }
-            OutlinedButton(onClick = { CallLogger.clear() }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.DeleteSweep, contentDescription = null)
-                Spacer(Modifier.width(5.dp))
-                Text("Clear all")
-            }
-        }
-        var expanded by remember { mutableStateOf(false) }
-        TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (expanded) "Hide log entries" else "Show log entries")
-        }
-        if (expanded) HorizontalDivider()
-        if (expanded && lines.isEmpty()) {
-            Text("No activity recorded yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else if (expanded) {
-            Column(
-                Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium).padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                lines.asReversed().forEach { line ->
-                    Text(line, style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
