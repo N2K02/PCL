@@ -116,6 +116,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 91 &&
+            !granted(Manifest.permission.READ_CALL_LOG)) {
+            toast("Call history access unavailable. Android may require installer allowlisting; PCL works without it.")
+        }
         loadDevices()
         if (role == LinkService.ROLE_REMOTE) loadContacts()
         refresh()
@@ -601,6 +605,29 @@ class MainActivity : ComponentActivity() {
                             PermissionSetupRow("Answer calls", "Allow call answering requests", granted(Manifest.permission.ANSWER_PHONE_CALLS)) { requestPermissions(arrayOf(Manifest.permission.ANSWER_PHONE_CALLS), 1) }
                             PermissionSetupRow("Place calls", "Place calls through the gateway SIM", granted(Manifest.permission.CALL_PHONE)) { requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 1) }
                             PermissionSetupRow("Contacts (for sync)", "Send Gateway contacts to the Remote and resolve caller names", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
+                            PermissionSetupRow(
+                                "Call history (optional)",
+                                "Improve finished SIM call details: caller number, name, private status and verified SIM. Not needed for normal PCL calling.",
+                                granted(Manifest.permission.READ_CALL_LOG),
+                                actionLabel = if (granted(Manifest.permission.READ_CALL_LOG)) "Granted" else "Request",
+                            ) {
+                                if (!granted(Manifest.permission.READ_CALL_LOG)) {
+                                    requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 91)
+                                }
+                            }
+                            if (!granted(Manifest.permission.READ_CALL_LOG)) {
+                                Text(
+                                    "Optional: Android restricts Call Log access. Tap Request; if Android blocks it or it does not appear in permissions, the installer must allowlist it. Opening App info alone cannot override this restriction. PCL continues working without Call Log access.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                OutlinedButton(onClick = {
+                                    runCatching {
+                                        startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                            android.net.Uri.fromParts("package", packageName, null)))
+                                    }.onFailure { toast("Open Settings → Apps → PCL → Permissions") }
+                                }) { Text("Check PCL permissions in Android Settings") }
+                            }
                             PermissionSetupRow("Notification access", "Send notifications and WhatsApp calls to the Remote", notificationAccess, actionLabel = "Open settings") { runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }.onFailure { toast("Open Android Settings → Notifications → Notification access") } }
                             val callHelperEnabled = WhatsappCallAccessibilityService.isEnabled(this@MainActivity)
                             PermissionSetupRow("WhatsApp calls (optional)", "Accessibility service \"PCL WhatsApp call helper\": lets PCL start the WhatsApp calls the Remote asks for", callHelperEnabled, actionLabel = "Open settings") {
