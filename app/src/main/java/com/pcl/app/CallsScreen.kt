@@ -716,7 +716,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             onDismissRequest = { confirmClear = false },
             title = { Text("Clear call history?") },
             text = { Text("This removes the list on this phone only. The Gateway's own call log isn't touched.") },
-            confirmButton = { TextButton(onClick = { CallHistory.clear(); confirmClear = false; expanded = null }) { Text("Clear") } },
+            confirmButton = { TextButton(onClick = { CallHistory.clearSim(); confirmClear = false; expanded = null }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
         )
     }
