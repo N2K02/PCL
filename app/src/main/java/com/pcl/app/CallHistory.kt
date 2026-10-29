@@ -95,7 +95,9 @@ object CallHistory {
     /** Legacy data may contain "-", "Unknown number" or call-app placeholders.
      *  Canonicalize on both load and write so they never leak back into Recents. */
     internal fun normalize(record: Record): Record {
-        val number = CallerId.asNumber(record.number)
+        val number = CallerId.asNumber(record.number).ifEmpty {
+            CallerId.asNumber(record.name)
+        }
         val name = CallerId.asName(record.name).ifEmpty {
             if (number.isEmpty() && CallerId.isPrivate(record.name)) CallerId.PRIVATE
             else ""
