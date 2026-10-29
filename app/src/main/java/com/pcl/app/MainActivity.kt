@@ -489,6 +489,11 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.clickable { if (setupReady) screen = MainTab.CALLS },
                         )
                     }
+                    ListItem(
+                        headlineContent = { Text("Logs") },
+                        supportingContent = { Text("Persistent diagnostics and crash reports") },
+                        modifier = Modifier.clickable { startActivity(Intent(this@MainActivity, LogsActivity::class.java)) },
+                    )
                     HorizontalDivider()
                     ListItem(
                         headlineContent = { Text("About & updates") },
