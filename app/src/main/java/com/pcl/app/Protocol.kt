@@ -51,6 +51,23 @@ object Commands {
     )
 }
 
+/** Device-independent request correlation and authoritative phone-state confirmation. */
+internal object CallControlProtocol {
+    fun peerRoleMatches(ourRole: String, peerRole: String): Boolean =
+        (ourRole == LinkService.ROLE_GATEWAY && peerRole == LinkService.ROLE_REMOTE) ||
+            (ourRole == LinkService.ROLE_REMOTE && peerRole == LinkService.ROLE_GATEWAY)
+
+    fun matchesResult(expectedId: Int, pendingCommand: String?, receivedId: String?): Boolean =
+        expectedId > 0 && pendingCommand != null &&
+            receivedId?.toIntOrNull() == expectedId
+
+    fun stateConfirmed(command: String?, state: String): Boolean = when (command) {
+        "ANSWER", "DIAL", "DIAL_SIM" -> state == LinkService.CALL_OFFHOOK
+        "REJECT", "HANGUP" -> state == LinkService.CALL_IDLE
+        else -> false
+    }
+}
+
 class FrameWriter(stream: OutputStream) {
     private val out = DataOutputStream(BufferedOutputStream(stream, 8192))
 

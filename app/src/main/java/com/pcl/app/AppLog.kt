@@ -91,6 +91,7 @@ object AppLog {
     }
 
     internal fun redact(value: String): String = value
+        .replace(Regex("(?i)(?:[0-9a-f]{2}:){5}[0-9a-f]{2}"), "[BT_DEVICE]")
         .replace(Regex("(?i)(bearer\\s+)[A-Za-z0-9._~+/-]+"), "$1[REDACTED]")
         .replace(Regex("(?i)(token|key|password|secret|authorization)(\\s*[:=]\\s*)[^\\s&,;]+"), "$1$2[REDACTED]")
         .replace(Regex("(?i)https?://\\S+"), "[URL]")

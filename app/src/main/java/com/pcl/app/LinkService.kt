@@ -309,17 +309,15 @@ class LinkService : Service() {
                 audio.isSpeakerphoneOn = route == "SPEAKER"
                 true
             }
-            val actual = gatewayRoute(audio)
-            val fallback = false
             val verifiedRoute = gatewayRoute(audio)
             val outcome = when {
                 verifiedRoute == route -> "APPLIED"
-                fallback -> "FALLBACK_QUEUED"
+                accepted -> "PENDING"
                 else -> "NOT_APPLIED"
             }
             Hub.log("Gateway audio route: requested=$route, actual=$verifiedRoute, outcome=$outcome")
             send("AUDIO_RESULT", "ROUTE", outcome, requestId)
-            if (fallback) verifyGatewayRouteLater(route, requestId)
+            if (outcome == "PENDING") verifyGatewayRouteLater(route, requestId)
         } catch (e: Exception) {
             Hub.log("Gateway audio route failed: ${e.javaClass.simpleName}")
             send("AUDIO_RESULT", "ROUTE", "ERROR", requestId)
@@ -658,11 +656,7 @@ class LinkService : Service() {
 
     /** A protocol acknowledgement is not proof that the telephone changed state. */
     private fun confirmCallState() {
-        val confirmed = when (pendingCallCommand) {
-            "ANSWER", "DIAL", "DIAL_SIM" -> callState == CALL_OFFHOOK
-            "REJECT", "HANGUP" -> callState == CALL_IDLE
-            else -> false
-        }
+        val confirmed = CallControlProtocol.stateConfirmed(pendingCallCommand, callState)
         if (confirmed) {
             pendingCallCommand = null
             pendingAnswer = false
@@ -929,8 +923,7 @@ class LinkService : Service() {
             "HELLO" -> {
                 peerProtocol = p.getOrNull(2)?.toIntOrNull()
                 peerAppVersion = p.getOrNull(3).orEmpty().take(20)
-                val expectedRole = if (role == ROLE_GATEWAY) ROLE_REMOTE else ROLE_GATEWAY
-                helloReceived = arg1 == expectedRole
+                helloReceived = CallControlProtocol.peerRoleMatches(role, arg1)
                 Hub.log("Peer is the $arg1 phone (PCL ${peerAppVersion.ifEmpty { "older version" }})")
                 versionWarning?.let { Hub.log("Version mismatch: $it") }
                 if (!helloReceived) {
@@ -1025,15 +1018,16 @@ class LinkService : Service() {
             "AUDIO_STEP" -> gatewayAudioStep(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_ROUTE" -> gatewaySetAudioRoute(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_RESULT" -> {
-                if (arg1 == "ROUTE_VERIFY") {
-                    Hub.log("Gateway delayed speaker verification: ${p.getOrNull(2).orEmpty()}")
+                val id = p.getOrNull(3).orEmpty()
+                val outcome = p.getOrNull(2).orEmpty()
+                if (arg1 == "ROUTE" && outcome == "PENDING") {
+                    Hub.log("Gateway audio route pending verification")
                     return
                 }
-                val id = p.getOrNull(3).orEmpty()
                 val timeout = pendingAudioRequests.remove(id)
                 if (timeout != null) {
                     audioTimeoutHandler.removeCallbacks(timeout)
-                    Hub.log("Gateway audio result: ${arg1} — ${p.getOrNull(2).orEmpty()}")
+                    Hub.log("Gateway audio result: ${arg1} — $outcome")
                 } else {
                     Hub.log("Ignoring stale audio acknowledgement")
                 }
@@ -1046,7 +1040,8 @@ class LinkService : Service() {
             }
             "CALL_RESULT" -> {
                 val request = p.getOrNull(2)?.toIntOrNull()
-                if (request != callControlRequest || pendingCallCommand == null) {
+                if (!CallControlProtocol.matchesResult(callControlRequest,
+                        pendingCallCommand, p.getOrNull(2))) {
                     Hub.log("Ignored stale or uncorrelated call-control acknowledgement")
                     return
                 }

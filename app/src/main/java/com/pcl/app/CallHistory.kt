@@ -370,6 +370,9 @@ object CallHistory {
                 ringingSim = null
                 connectedSince = 0L
                 declinedHere = false
+                lastDialAt = 0L
+                lastDialNumber = ""
+                lastDialName = ""
                 val durable = record?.let { entry ->
                     add(if (entry.number.isBlank() && RecentCallNumber.isDialable(number))
                         entry.copy(number = number, name = name) else entry)

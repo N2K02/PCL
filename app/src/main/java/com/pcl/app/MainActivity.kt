@@ -653,7 +653,8 @@ class MainActivity : ComponentActivity() {
                         HorizontalDivider()
                         Text("Privacy", style = MaterialTheme.typography.titleMedium)
                         Text("PCL uses permissions for the selected phone role. Grant only the access needed for the features you want to use.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedButton(onClick = { roleSelected = false; prefs.edit().remove(Prefs.ROLE).apply(); screen = MainTab.SETTINGS; refresh() }, modifier = Modifier.fillMaxWidth()) { Text("Reset device role") }
+                        OutlinedButton(onClick = { roleSelected = false; prefs.edit().remove(Prefs.ROLE).apply(); screen = MainTab.SETTINGS; refresh() },
+                            enabled = !running, modifier = Modifier.fillMaxWidth()) { Text(if (running) "Stop the link before resetting the role" else "Reset device role") }
                     }
                     
                     Text("PCL • Material 3 Expressive", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally))
