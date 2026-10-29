@@ -98,14 +98,21 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
-      - name: Build APK
+      - name: Test and build APK
         run: |
           echo "Android SDK: ${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           yes | "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           chmod +x gradlew
           set -o pipefail
-          ./gradlew --no-daemon assembleRelease -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
-          cp app/build/outputs/apk/release/app-release.apk "$APP-$VERSION.apk"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            VARIANT=Debug
+            OUTPUT=debug/app-debug.apk
+          else
+            VARIANT=Release
+            OUTPUT=release/app-release.apk
+          fi
+          ./gradlew --no-daemon testDebugUnitTest "assemble$VARIANT" -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
+          cp "app/build/outputs/apk/$OUTPUT" "$APP-$VERSION.apk"
 
       - name: Publish APK release
         if: github.event_name != 'pull_request'
