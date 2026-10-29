@@ -31,7 +31,8 @@ class CallerPresentationIntegrationContractTest {
         assertTrue(history.contains("val number = CallerId.asNumber(record.number)"))
         assertTrue(ui.contains("RecentCallCard("))
         assertTrue(source("RecentCallCard").contains("RecentCallActionsPolicy.title(record, lookedUpName)"))
-        assertTrue(ui.contains("CallerId.callSummary(r.type.name, source)"))
+        assertTrue(source("RecentCallActionsPolicy").contains(
+            "CallerId.callSummary(record.type.name, source)"))
         assertFalse(ui.contains("r.number.ifEmpty { \"Unknown number\" }"))
     }
 
