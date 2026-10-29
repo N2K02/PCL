@@ -23,6 +23,18 @@ class SimRuntimeIntegrationTest {
         assertTrue(service.contains("callLogExecutor.shutdownNow()"))
     }
 
+    @Test fun firstSnapshotAfterFreshConnectionCannotBecomeSpuriousCall() {
+        val service = source("LinkService")
+        val start = service.substringAfter("private fun runSession(")
+            .substringBefore("val input = DataInputStream")
+        assertTrue("Fresh socket must arm the reconnect guard",
+            start.contains("if (role == ROLE_REMOTE) CallHistory.onLinkLost()"))
+        assertTrue("Guard must be armed before first CALL can arrive",
+            start.indexOf("CallHistory.onLinkLost()") < start.indexOf("send(\"HELLO\""))
+        val history = source("CallHistory")
+        assertTrue(history.contains("if (!recovery.shouldTrack(state)) return null"))
+    }
+
     @Test fun verifiedSimAccountsAreRequiredForDirectedDialAndUi() {
         val link = source("LinkService")
         val screen = source("CallsScreen")

@@ -740,6 +740,10 @@ class LinkService : Service() {
         helloReceived = false
         peerProtocol = null
         peerAppVersion = ""
+        // The Gateway's first CALL after a fresh Remote session is a snapshot,
+        // not evidence of a newly started ringing or outgoing call. This also
+        // protects process recreation where no disconnect callback ran.
+        if (role == ROLE_REMOTE) CallHistory.onLinkLost()
         send("HELLO", role, Protocol.VERSION.toString(), appVersion)
         if (role == ROLE_GATEWAY) {
             sendCallState()
