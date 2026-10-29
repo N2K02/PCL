@@ -225,8 +225,11 @@ object CallHistory {
         val records = _records.value
         val index = SimHistoryEnrichment.findUnique(records, originalStartMs,
             direction) ?: return null
+        val original = records[index]
+        if (!SimHistoryEnrichment.compatible(original, number, sim)) return null
+        // A repeated delivery is still an accepted, saved record: ACK it.
         val updated = SimHistoryEnrichment.merge(
-            records[index], number, name, restricted, sim) ?: return null
+            original, number, name, restricted, sim) ?: return original
         val changed = records.toMutableList().also { it[index] = updated }
         _records.value = changed
         save(changed)
