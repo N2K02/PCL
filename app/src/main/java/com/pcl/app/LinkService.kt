@@ -664,6 +664,22 @@ class LinkService : Service() {
         }
     }
 
+    /** Fail closed if a specific SIM cannot be selected on the Gateway.
+     *  Unlike the regular dial action, this never silently chooses default.
+     */
+    fun dialWithSim(number: String, name: String, slot: Int) {
+        val clean = CallerId.asNumber(number)
+        if (clean.isBlank() || slot !in availableSimSlots || !connected ||
+            role != ROLE_REMOTE || callState != CALL_IDLE) {
+            callControlError = "FAILED: This SIM is not available for a directed call"
+            Hub.notifyUi()
+            return
+        }
+        CallHistory.onDialRequested(clean, name)
+        simDialAt = SystemClock.elapsedRealtime()
+        requestGateway("DIAL_SIM", clean, slot)
+    }
+
     /** Ask the Gateway to refresh the Remote's offline contact cache. */
     fun syncContacts() {
         if (role == ROLE_GATEWAY) {
@@ -789,7 +805,7 @@ class LinkService : Service() {
         }
     }
 
-    private fun requestGateway(command: String, argument: String = "") {
+    private fun requestGateway(command: String, argument: String = "", slot: Int? = null) {
         if (!connected) {
             callControlError = "FAILED: Bluetooth is disconnected"
             Hub.log("Call control failed: Bluetooth is disconnected")
@@ -797,7 +813,11 @@ class LinkService : Service() {
             return
         }
         callControlError = "PENDING: Waiting for Gateway confirmation"
-        if (command == "DIAL") send(command, argument) else send(command)
+        when (command) {
+            "DIAL" -> send(command, argument)
+            "DIAL_SIM" -> send(command, argument, slot?.toString().orEmpty())
+            else -> send(command)
+        }
         val request = ++callControlRequest
         trafficHandler.postDelayed({
             // No answer at all: say so instead of waiting forever.
@@ -1125,6 +1145,9 @@ class LinkService : Service() {
                         p.getOrNull(6)?.let(::decodeText).orEmpty(),
                         p.getOrNull(7)?.let(::decodeText).orEmpty())
                 }
+                availableSimSlots = p.getOrNull(8).orEmpty().split(",")
+                    .mapNotNull { it.toIntOrNull()?.takeIf { slot -> slot in 0..1 } }
+                    .toSet()
                 CallHistory.onSimState(callState, callNumber, callName, callSimIdentity)
                     ?.takeIf { it.type == CallHistory.Type.MISSED }
                     ?.let(::showMissedCall)
@@ -1149,6 +1172,10 @@ class LinkService : Service() {
             "ANSWER" -> { gatewayAnswer(); sendCallResult() }
             "REJECT", "HANGUP" -> { gatewayEnd(rejectRinging = cmd == "REJECT"); sendCallResult() }
             "DIAL" -> { gatewayDial(arg1); sendCallResult() }
+            "DIAL_SIM" -> {
+                gatewayDial(arg1, p.getOrNull(2)?.toIntOrNull())
+                sendCallResult()
+            }
             "SYNC_CONTACTS" -> sendContacts()
             "AUDIO_QUERY" -> gatewayAudioStatus()
             "AUDIO_VOLUME" -> gatewaySetAudioVolume(arg1, p.getOrNull(2).orEmpty())
@@ -1305,6 +1332,8 @@ class LinkService : Service() {
     private val pendingCallLogTasks = mutableSetOf<Runnable>()
     /** Verified subscription only. Never use the default DATA SIM as a guess. */
     @Volatile var callSimIdentity: SimCallIdentity? = null
+        private set
+    @Volatile var availableSimSlots: Set<Int> = emptySet()
         private set
 
     fun simCallStartedAt(): Long = simCallStartedMs
@@ -1534,7 +1563,8 @@ class LinkService : Service() {
             send("CALL", callState, callNumber, callName, callDirection,
                 sim?.slotIndex?.toString().orEmpty(),
                 encodeText(sim?.displayName.orEmpty()),
-                encodeText(sim?.carrier.orEmpty()))
+                encodeText(sim?.carrier.orEmpty()),
+                SimDialAccounts.availableSlots(this).sorted().joinToString(","))
         }
     }
 
@@ -1649,8 +1679,8 @@ class LinkService : Service() {
     }
 
     @SuppressLint("MissingPermission")
-    private fun gatewayDial(number: String) {
-        val n = number.trim()
+    private fun gatewayDial(number: String, selectedSlot: Int? = null) {
+        val n = CallerId.asNumber(number)
         if (n.isEmpty()) { callControlError = "FAILED: Empty phone number"; return }
         if (!has(Manifest.permission.CALL_PHONE)) {
             callControlError = "FAILED: Phone permission missing on Gateway"
@@ -1658,11 +1688,21 @@ class LinkService : Service() {
             return
         }
         try {
+            val extras = Bundle()
+            if (selectedSlot != null) {
+                val account = SimDialAccounts.accountForSlot(this, selectedSlot)
+                if (account == null) {
+                    callControlError = "FAILED: Android cannot securely select SIM ${selectedSlot + 1}"
+                    Hub.log("Directed SIM call rejected: no uniquely mapped Telecom phone account")
+                    return
+                }
+                extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, account)
+            }
             callNumber = n
             callName = lookupName(n)
             callDirection = "OUTGOING"
             getSystemService(TelecomManager::class.java)!!
-                .placeCall(Uri.fromParts("tel", n, null), Bundle())
+                .placeCall(Uri.fromParts("tel", n, null), extras)
             callControlError = null
             Hub.log("Dialing ${logCaller(n)}")
         } catch (e: Exception) {
