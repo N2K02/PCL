@@ -5,8 +5,11 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OptionalCallLogIntegrationContractTest {
-    private fun source(name: String): String =
-        File("app/src/main/java/com/pcl/app/$name.kt").readText()
+    private fun source(name: String): String {
+        val path = "app/src/main/java/com/pcl/app/$name.kt"
+        return listOf(File(path), File("../$path")).firstOrNull { it.isFile }
+            ?.readText() ?: error("Missing $path")
+    }
 
     @Test fun optionalLookupRequiresGrantedPermissionAndNeverRunsForUnknownDirection() {
         val reader = source("OptionalSimCallLog")
@@ -26,7 +29,9 @@ class OptionalCallLogIntegrationContractTest {
     }
     @Test fun permissionIsOptionalAndNeverPartOfRequiredGatewayConnection() {
         val activity = source("MainActivity")
-        val manifest = File("app/src/main/AndroidManifest.xml").readText()
+        val manifest = listOf(File("app/src/main/AndroidManifest.xml"),
+            File("../app/src/main/AndroidManifest.xml"))
+            .firstOrNull { it.isFile }?.readText() ?: error("Missing AndroidManifest.xml")
         assertTrue(manifest.contains("android.permission.READ_CALL_LOG"))
         val required = activity.substringAfter("private fun gatewayPerms(): List<String>")
             .substringBefore("private fun granted(p: String)")
