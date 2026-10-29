@@ -139,7 +139,8 @@ object CallHistory {
         val list = (listOf(canonical) + _records.value).take(MAX)
         _records.value = list
         save(list)
-        if (canonical.type == Type.MISSED) setUnseen(_unseenMissed.value + 1)
+        if (canonical.type == Type.MISSED && SimRecentsAnalytics.isSim(canonical))
+            setUnseen(_unseenMissed.value + 1)
     }
 
     private fun save(list: List<Record>) {
