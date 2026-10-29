@@ -670,13 +670,17 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             Text("SIM call statistics · saved history", style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(listOf(0, 1, -1)) { slot ->
-                    val selected = if (slot < 0) null else slot
-                    SimStatisticsTile(
-                        title = if (slot < 0) "Other / unknown SIM" else "SIM ${slot + 1}",
-                        stats = SimRecentsAnalytics.stats(records, selected),
-                    )
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val tileWidth = (maxWidth - 16.dp) / 3
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(0, 1, -1).forEach { slot ->
+                        val selected = if (slot < 0) null else slot
+                        SimStatisticsTile(
+                            title = if (slot < 0) "Other SIM" else "SIM ${slot + 1}",
+                            stats = SimRecentsAnalytics.stats(records, selected),
+                            modifier = Modifier.width(tileWidth),
+                        )
+                    }
                 }
             }
         }
@@ -717,29 +721,40 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
     }
 }
 
-/** Compact all-time metrics. VoIP is intentionally excluded from SIM totals. */
+/** Three compact stats tiles across, like the approved visual mockup. */
 @Composable
-private fun SimStatisticsTile(title: String, stats: SimRecentsAnalytics.Stats) {
+private fun SimStatisticsTile(
+    title: String, stats: SimRecentsAnalytics.Stats, modifier: Modifier = Modifier,
+) {
     Surface(
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         shape = RoundedCornerShape(18.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.50f)),
-        modifier = Modifier.width(208.dp),
+        modifier = modifier,
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(title, style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.padding(horizontal = 9.dp, vertical = 11.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Icon(Icons.Default.SimCard, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(15.dp))
+                Text(title, style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
             Text("${stats.calls} calls", style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold)
-            Text("↓ ${stats.incoming} incoming   ↑ ${stats.outgoing} outgoing",
-                style = MaterialTheme.typography.labelSmall,
+            val talk = stats.talkSeconds.coerceAtLeast(0L)
+            val talkText = if (talk >= 3600L)
+                "${talk / 3600}h ${(talk / 60) % 60}m"
+            else "${talk / 60}m"
+            Text(talkText, style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("${stats.missed} missed · ${stats.declined} declined",
+            Text("↓${stats.incoming} ↑${stats.outgoing}  ·  ${stats.missed} missed",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("Talk time ${duration(stats.talkSeconds)}",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
