@@ -1115,6 +1115,16 @@ class LinkService : Service() {
         return if (numbers.size == 1) matches.first().number else ""
     }
 
+    // Encode optional SIM labels as URL-safe Base64 to avoid protocol field delimiters.
+    private fun encodeText(value: String): String =
+        android.util.Base64.encodeToString(value.toByteArray(Charsets.UTF_8),
+            android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE)
+
+    private fun decodeText(value: String): String = try {
+        String(android.util.Base64.decode(value,
+            android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE), Charsets.UTF_8)
+    } catch (_: Exception) { "" }
+
     private fun sendCallState() {
         if (writer != null) {
             val sim = callSimIdentity
