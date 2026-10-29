@@ -31,6 +31,8 @@ object CallHistory {
         val durationSec: Long = 0,
         /** A WhatsApp call on the Gateway rather than a SIM call. */
         val whatsapp: Boolean = false,
+        /** Original VoIP app for non-WhatsApp third-party call history. */
+        val sourceApp: String? = null,
     )
 
     private const val FILE = "call_history.json"
@@ -73,14 +75,15 @@ object CallHistory {
                 val arr = JSONArray(f.readText())
                 (0 until arr.length()).mapNotNull { i ->
                     val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                    Record(
+                    normalize(Record(
                         number = o.optString("n"),
                         name = o.optString("m"),
                         type = runCatching { Type.valueOf(o.optString("t")) }.getOrNull() ?: return@mapNotNull null,
                         at = o.optLong("a"),
                         durationSec = o.optLong("d"),
                         whatsapp = o.optBoolean("w"),
-                    )
+                        sourceApp = o.optString("s").takeIf { it.isNotBlank() && it != "null" },
+                    ))
                 }
             }
         } catch (_: Exception) {
@@ -89,13 +92,28 @@ object CallHistory {
         _unseenMissed.value = Prefs.of(app).getInt(PREF_UNSEEN_MISSED, 0)
     }
 
+    /** Legacy data may contain "-", "Unknown number" or call-app placeholders.
+     *  Canonicalize on both load and write so they never leak back into Recents. */
+    internal fun normalize(record: Record): Record {
+        val number = CallerId.asNumber(record.number)
+        val name = CallerId.asName(record.name).ifEmpty {
+            if (number.isEmpty() && CallerId.isPrivate(record.name)) CallerId.PRIVATE
+            else ""
+        }
+        return record.copy(number = number, name = name,
+            sourceApp = CallerId.clean(record.sourceApp).takeIf {
+                it.isNotBlank() && !CallerId.isPlaceholder(it) && it != "-"
+            })
+    }
+
     @Synchronized
     fun add(record: Record) {
         if (!loaded) return
-        val list = (listOf(record) + _records.value).take(MAX)
+        val canonical = normalize(record)
+        val list = (listOf(canonical) + _records.value).take(MAX)
         _records.value = list
         save(list)
-        if (record.type == Type.MISSED) setUnseen(_unseenMissed.value + 1)
+        if (canonical.type == Type.MISSED) setUnseen(_unseenMissed.value + 1)
     }
 
     private fun save(list: List<Record>) {
@@ -103,7 +121,8 @@ object CallHistory {
             val arr = JSONArray()
             list.forEach { r ->
                 arr.put(JSONObject().put("n", r.number).put("m", r.name).put("t", r.type.name)
-                    .put("a", r.at).put("d", r.durationSec).put("w", r.whatsapp))
+                    .put("a", r.at).put("d", r.durationSec).put("w", r.whatsapp)
+                    .put("s", r.sourceApp ?: JSONObject.NULL))
             }
             File(app.filesDir, FILE).writeText(arr.toString())
         } catch (e: Exception) {
@@ -131,8 +150,8 @@ object CallHistory {
     /** The Remote asked the Gateway to dial: remembered because Android may not report the number. */
     @Synchronized
     fun onDialRequested(number: String, name: String) {
-        lastDialNumber = number
-        lastDialName = name
+        lastDialNumber = CallerId.asNumber(number)
+        lastDialName = CallerId.asName(name)
         lastDialAt = System.currentTimeMillis()
     }
 
@@ -148,6 +167,16 @@ object CallHistory {
      */
     @Synchronized
     fun onSimState(state: String, number: String, name: String): Record? {
+        val verifiedNumber = CallerId.asNumber(number)
+        val verifiedName = CallerId.asName(name).ifEmpty {
+            if (verifiedNumber.isEmpty() && CallerId.isPrivate(name)) CallerId.PRIVATE
+            else ""
+        }
+        return onVerifiedSimState(state, verifiedNumber, verifiedName)
+    }
+
+    @Synchronized
+    private fun onVerifiedSimState(state: String, number: String, name: String): Record? {
         val previous = lastState
         if (state == previous) {
             // Ringing may be reported again once the caller's name is known.
