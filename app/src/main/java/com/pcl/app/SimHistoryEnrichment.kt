@@ -24,16 +24,24 @@ internal object SimHistoryEnrichment {
         }.singleOrNull()
     }
 
+    fun compatible(
+        old: CallHistory.Record, number: String?, sim: SimCallIdentity?,
+    ): Boolean {
+        if (!SimRecentsAnalytics.isSim(old)) return false
+        val existingNumber = CallerId.asNumber(old.number)
+        val newNumber = CallerId.asNumber(number)
+        if (existingNumber.isNotEmpty() && newNumber.isNotEmpty() &&
+            !CallerId.sameNumber(existingNumber, newNumber)) return false
+        return old.simSlot == null || sim == null || old.simSlot == sim.slotIndex
+    }
+
     fun merge(
         old: CallHistory.Record, number: String?, name: String?,
         restricted: Boolean, sim: SimCallIdentity?,
     ): CallHistory.Record? {
-        if (!SimRecentsAnalytics.isSim(old)) return null
+        if (!compatible(old, number, sim)) return null
         val existingNumber = CallerId.asNumber(old.number)
         val newNumber = CallerId.asNumber(number)
-        if (existingNumber.isNotEmpty() && newNumber.isNotEmpty() &&
-            !CallerId.sameNumber(existingNumber, newNumber)) return null
-        if (old.simSlot != null && sim != null && old.simSlot != sim.slotIndex) return null
         val safeNumber = existingNumber.ifEmpty { newNumber }
         val safeName = CallerId.asName(old.name).ifEmpty {
             CallerId.asName(name)
