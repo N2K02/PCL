@@ -637,7 +637,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("${shownRecords.size} of ${records.size} calls", style = MaterialTheme.typography.labelLarge,
+                Text("${shownRecords.size} of ${SimRecentsAnalytics.filter(records, SimRecentsAnalytics.Filter.ALL).size} SIM calls", style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 TextButton(onClick = { confirmClear = true }) {
                     Icon(Icons.Default.DeleteSweep, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Clear")
