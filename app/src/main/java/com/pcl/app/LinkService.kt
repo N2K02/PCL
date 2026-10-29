@@ -1689,7 +1689,8 @@ class LinkService : Service() {
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Call in progress")
             .setContentText(display())
-            .setSubText("on the Gateway")
+            .setSubText(callSimIdentity?.description()?.let { "$it · on the Gateway" }
+                ?: "on the Gateway")
             .setCategory(Notification.CATEGORY_CALL)
             .setOngoing(true)
             .setUsesChronometer(CallHistory.connectedSince > 0)
@@ -2079,6 +2080,7 @@ class LinkService : Service() {
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentTitle("Incoming call")
             .setContentText(display())
+            .setSubText(callSimIdentity?.description().orEmpty())
             .setCategory(Notification.CATEGORY_CALL)
             .setOngoing(true)
             .setContentIntent(openCallsPi())
