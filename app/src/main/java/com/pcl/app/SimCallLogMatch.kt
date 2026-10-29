@@ -45,8 +45,8 @@ internal object SimCallLogMatch {
                 it.contains("whatsapp", true) || it.contains("signal", true) ||
                     it.contains("telegram", true) || it.contains("messenger", true)
             } ?: false
-            row.type in types && !thirdParty && drift <=
-                if (known.isNotEmpty()) 45_000L else 8_000L && compatible
+            row.type in types && !thirdParty &&
+                drift <= (if (known.isNotEmpty()) 45_000L else 8_000L) && compatible
         }
         return matching.singleOrNull()
     }
