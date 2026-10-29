@@ -312,6 +312,7 @@ class MainActivity : ComponentActivity() {
                         callState = callState,
                         callDisplay = service?.display().orEmpty(),
                         simStatus = service?.callControlError,
+                        simIdentity = service?.callSimIdentity,
                         simOnGateway = service?.simCallOnGateway == true,
                         whatsappStatus = service?.whatsappCallStatus,
                         mirrorCall = service?.liveMirrorCall,
@@ -529,6 +530,10 @@ class MainActivity : ComponentActivity() {
                         )
                         if (callState == LinkService.CALL_RINGING || callState == LinkService.CALL_OFFHOOK) {
                             Text(service?.display().orEmpty(), style = MaterialTheme.typography.bodyLarge)
+                            service?.callSimIdentity?.let { sim ->
+                                Text(sim.description(), style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                         if (remote && service?.simCallOnGateway == true) {
                             Text("Taken on the Gateway, so this phone stays quiet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
