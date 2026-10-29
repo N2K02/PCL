@@ -174,6 +174,16 @@ object CallHistory {
         setUnseen(0)
     }
 
+    /** Clear saved SIM records only; preserve legacy VoIP history and contacts. */
+    @Synchronized
+    fun clearSim() {
+        if (!loaded) return
+        val retained = _records.value.filterNot(SimRecentsAnalytics::isSim)
+        _records.value = retained
+        save(retained)
+        setUnseen(retained.count { it.type == Type.MISSED })
+    }
+
     /**
      * Delete only one selected local history item. Never affect Android's
      * device call log or synced Gateway contacts.
