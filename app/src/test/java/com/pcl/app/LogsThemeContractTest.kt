@@ -18,5 +18,7 @@ class LogsThemeContractTest {
         assertTrue(src("app/src/main/java/com/pcl/app/UnifiedLogsPage.kt").contains("AppLog.clear()"))
         assertFalse(src("app/src/main/java/com/pcl/app/UnifiedLogsPage.kt").contains("Text(\"Back\")"))
         assertFalse(manifest.contains("com.pcl.app.LogsActivity"))
+        assertTrue(ui.contains("MainTab.LOGS -> Icons.Rounded.Article"))
+        assertTrue(ui.contains("leadingContent = { Icon(Icons.Rounded.Article, contentDescription = null) }"))
     }
 }
