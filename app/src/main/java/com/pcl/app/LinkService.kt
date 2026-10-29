@@ -43,6 +43,10 @@ import java.io.DataInputStream
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -408,6 +412,9 @@ class LinkService : Service() {
     @Volatile private var writer: FrameWriter? = null
     private var worker: Thread? = null
     private val io = Executors.newSingleThreadExecutor()
+    /** CallLog providers may block: never queue these reads on the Bluetooth writer. */
+    private val callLogExecutor = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(8))
     private var receiverRegistered = false
     private var ringtone: Ringtone? = null
 
@@ -512,6 +519,7 @@ class LinkService : Service() {
     override fun onDestroy() {
         shutdown()
         io.shutdownNow()
+        callLogExecutor.shutdownNow()
         Hub.service = null
         Hub.notifyUi()
         super.onDestroy()
@@ -1025,6 +1033,7 @@ class LinkService : Service() {
                 mirroredCalls.keys.forEach { nm.cancel(TAG_MIRROR, it.hashCode()) }
                 mirroredCalls.clear()
                 whatsappTracker.reset()
+                CallHistory.onLinkLost()
             }
         }
     }
@@ -1041,6 +1050,7 @@ class LinkService : Service() {
         if (!running && worker == null) return
         running = false
         trafficHandler.removeCallbacks(trafficSampler)
+        callLogExecutor.queue.clear()
         pendingCallLogTasks.forEach(trafficHandler::removeCallbacks)
         pendingCallLogTasks.clear()
         downloadBytesPerSecond = 0L; uploadBytesPerSecond = 0L
@@ -1115,6 +1125,10 @@ class LinkService : Service() {
                 helloReceived = true
                 Hub.log("Peer is the $arg1 phone (PCL ${peerAppVersion.ifEmpty { "older version" }})")
                 versionWarning?.let { Hub.log("Version mismatch: $it") }
+                if (role == ROLE_GATEWAY && peerProtocol != null &&
+                    peerProtocol!! >= 7 && arg1 == ROLE_REMOTE) {
+                    sendPendingSimEnrichment()
+                }
             }
             // Sent by older PCL versions, which switched the Gateway's Wi-Fi hotspot for calls.
             "HOTSPOT_STATE", "WHATSAPP_CALL_TRIGGER" -> Unit
@@ -1163,10 +1177,21 @@ class LinkService : Service() {
                     SimCallIdentity(it, p.getOrNull(6)?.let(::decodeText).orEmpty(),
                         p.getOrNull(7)?.let(::decodeText).orEmpty())
                 }
-                CallHistory.amendSim(
-                    started, number, name, withheld, sim, p.getOrNull(8).orEmpty())
-                    ?.let { Hub.log("A completed SIM call received verified call history details") }
+                val direction = p.getOrNull(8).orEmpty()
+                val id = p.getOrNull(9).orEmpty()
+                if (id == "${started}_${direction}") {
+                    CallHistory.amendSim(started, number, name, withheld, sim, direction)
+                        ?.let {
+                            Hub.log("A completed SIM call received verified call history details")
+                            send("CALL_LOG_ACK", id)
+                        }
+                }
                 Hub.notifyUi()
+            }
+            "CALL_LOG_ACK" -> {
+                if (role == ROLE_GATEWAY) {
+                    PendingSimEnrichment.acknowledge(this, arg1)
+                }
             }
             // remote -> gateway
             "ANSWER" -> { gatewayAnswer(); sendCallResult() }
@@ -1341,8 +1366,24 @@ class LinkService : Service() {
 
     fun simCallStartedAt(): Long = simCallStartedMs
 
-    /** One short delayed lookup (with one retry), only after an actual SIM
-     *  session has ended. Never query the call log in the ringing/recording path.
+    /** Outbox survives disconnects and process restarts. ACK removes only the
+     *  exact call ID after the Remote has saved a matching SIM history entry.
+     */
+    private fun sendPendingSimEnrichment() {
+        if (!connected || writer == null || role != ROLE_GATEWAY ||
+            peerProtocol == null || peerProtocol!! < 7) return
+        PendingSimEnrichment.snapshot(this).forEach { entry ->
+            send("CALL_LOGGED", entry.startedAt.toString(),
+                encodeText(entry.number), encodeText(entry.name),
+                if (entry.privateCaller) "1" else "0",
+                entry.simSlot?.toString().orEmpty(),
+                encodeText(entry.simName), encodeText(entry.carrier),
+                entry.direction, entry.id)
+        }
+    }
+
+    /** One bounded lookup with one retry; the phone's CallLog provider must
+     *  never block the Bluetooth writer/receiver, even if it hangs for seconds.
      */
     private fun enrichCompletedSimCall(
         startedAt: Long, direction: String, number: String, sim: SimCallIdentity?,
@@ -1356,21 +1397,28 @@ class LinkService : Service() {
                 pendingCallLogTasks.remove(task)
                 if (!running || generation != currentGeneration ||
                     role != ROLE_GATEWAY || !OptionalSimCallLog.canRead(this)) return@Runnable
-                io.execute {
-                    if (!running || generation != currentGeneration) return@execute
-                    val match = OptionalSimCallLog.read(this, startedAt, direction, number, sim)
-                    if (match == null) {
-                        if (retry) trafficHandler.post { schedule(10_000L, false) }
-                        return@execute
+                try {
+                    callLogExecutor.execute {
+                        if (!running || generation != currentGeneration) return@execute
+                        val match = OptionalSimCallLog.read(this, startedAt, direction, number, sim)
+                        trafficHandler.post {
+                            if (!running || generation != currentGeneration) return@post
+                            if (match == null) {
+                                if (retry) schedule(10_000L, false)
+                                return@post
+                            }
+                            val entry = PendingSimEnrichment.Entry(
+                                startedAt, direction, match.number, match.name,
+                                match.privateCaller, match.sim?.slotIndex,
+                                match.sim?.displayName.orEmpty(),
+                                match.sim?.carrier.orEmpty(), System.currentTimeMillis())
+                            PendingSimEnrichment.add(this, entry)
+                            sendPendingSimEnrichment()
+                            Hub.log("SIM call history details queued for reliable Remote sync")
+                        }
                     }
-                    if (!connected || writer == null) return@execute
-                    send("CALL_LOGGED", startedAt.toString(),
-                        encodeText(match.number), encodeText(match.name),
-                        if (match.privateCaller) "1" else "0",
-                        match.sim?.slotIndex?.toString().orEmpty(),
-                        encodeText(match.sim?.displayName.orEmpty()),
-                        encodeText(match.sim?.carrier.orEmpty()), direction)
-                    Hub.log("Optional SIM call history enrichment matched; details sent to Remote")
+                } catch (_: RejectedExecutionException) {
+                    Hub.log("Optional call history queue full; active call controls unaffected")
                 }
             }
             pendingCallLogTasks.add(task)
