@@ -20,7 +20,8 @@ internal object RecentCallActionsPolicy {
     fun availability(record: CallHistory.Record, connected: Boolean,
                      idle: Boolean, knownSimSlots: Set<Int> = emptySet()): Availability {
         val hasNumber = CallerId.asNumber(record.number).isNotEmpty()
-        val dial = hasNumber && connected && idle
+        val dial = hasNumber && connected && idle &&
+            SimRecentsAnalytics.isSim(record)
         // Selecting a SIM must be explicit and supported by an active
         // Gateway subscription; the Gateway checks the real phone account too.
         return Availability(
