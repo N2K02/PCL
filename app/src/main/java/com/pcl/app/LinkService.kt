@@ -330,6 +330,7 @@ class LinkService : Service() {
         private set
     @Volatile var callName: String = ""
         private set
+    private var callSimIdentity: SimCallIdentity? = null
     @Volatile var callDirection: String = ""
         private set
     @Volatile var callControlError: String? = null
@@ -824,19 +825,26 @@ class LinkService : Service() {
                 val previousState = callState
                 callState = arg1.takeIf { it in setOf(CALL_IDLE, CALL_RINGING, CALL_OFFHOOK) } ?: CALL_IDLE
                 if (callState == CALL_RINGING) callControlError = null
-                callNumber = p.getOrElse(2) { "" }.trim()
+                callNumber = CallerId.asNumber(p.getOrElse(2) { "" })
                 val receivedName = p.getOrElse(3) { "" }.trim()
                 // Generic dialer placeholders are not contact names. When the
                 // Gateway supplied a number, display that number on the Remote.
-                callName = receivedName.takeUnless {
-                    it.equals("Unknown number", ignoreCase = true) ||
-                        it.equals("Unknown", ignoreCase = true) ||
-                        it.equals("Incoming call", ignoreCase = true) ||
-                        it.equals("Private number", ignoreCase = true) ||
-                        it.equals("No caller ID", ignoreCase = true)
-                }.orEmpty()
+                callName = CallerId.asName(receivedName).ifEmpty {
+                    if (callNumber.isBlank() && CallerId.isPrivate(receivedName))
+                        CallerId.PRIVATE else ""
+                }
+                if (callNumber.isBlank() && callName.isNotBlank() &&
+                    !CallerId.isPrivate(callName)) {
+                    callNumber = resolveUniqueContactNumber(callName)
+                }
                 callDirection = p.getOrElse(4) { "" }
-                CallHistory.onSimState(callState, callNumber, callName)
+                val slot = p.getOrNull(5)?.toIntOrNull()?.takeIf { it in 0..3 }
+                callSimIdentity = slot?.let {
+                    SimCallIdentity(it, p.getOrNull(6)?.let(::decodeText).orEmpty(),
+                        p.getOrNull(7)?.let(::decodeText).orEmpty())
+                }
+                CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
+                    p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L })
 
                 onRemoteCallUpdate(previousState)
             }
@@ -954,6 +962,8 @@ class LinkService : Service() {
                 callName = lookupName(num)
             }
             val changed = newState != callState
+            if (newState != CALL_IDLE && (changed || callSimIdentity == null))
+                callSimIdentity = SimCallDetector.identify(this@LinkService, newState)
             if (changed && newState == CALL_RINGING) callControlError = null
             callState = newState
             if (changed || gotNumber) {
@@ -963,6 +973,7 @@ class LinkService : Service() {
             if (newState == CALL_IDLE) {
                 callNumber = ""
                 callName = ""
+                callSimIdentity = null
             }
             Hub.notifyUi()
         }
@@ -1105,7 +1116,14 @@ class LinkService : Service() {
     }
 
     private fun sendCallState() {
-        if (writer != null) send("CALL", callState, callNumber, callName, callDirection)
+        if (writer != null) {
+            val sim = callSimIdentity
+            send("CALL", callState, callNumber, callName, callDirection,
+                sim?.slotIndex?.toString().orEmpty(), encodeText(sim?.displayName.orEmpty()),
+                encodeText(sim?.carrier.orEmpty()),
+                SimDialAccounts.availableSlots(this).sorted().joinToString(","),
+                simCallStartedMs.takeIf { it > 0L }?.toString().orEmpty())
+        }
     }
 
     @SuppressLint("MissingPermission")

@@ -512,6 +512,10 @@ private fun StatusLine(ui: CallsUi) {
 @Composable
 private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onEdit: (String) -> Unit) {
     val records by CallHistory.records.collectAsState()
+    var simFilter by rememberSaveable { mutableStateOf(SimRecentsAnalytics.Filter.ALL.name) }
+    val selectedFilter = SimRecentsAnalytics.Filter.entries.firstOrNull { it.name == simFilter }
+        ?: SimRecentsAnalytics.Filter.ALL
+    val shownRecords = SimRecentsAnalytics.filter(records, selectedFilter)
     var confirmClear by remember { mutableStateOf(false) }
 
     if (records.isEmpty()) {
@@ -520,15 +524,24 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item {
+            Row(Modifier.fillMaxWidth()) {
+                SimRecentsAnalytics.Filter.entries.forEach { choice ->
+                    TextButton(onClick = { simFilter = choice.name }, modifier = Modifier.weight(1f)) {
+                        Text(choice.title, maxLines = 1)
+                    }
+                }
+            }
+        }
+        item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("${records.size} calls", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                Text("${shownRecords.size} of ${records.size} SIM calls", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 TextButton(onClick = { confirmClear = true }) {
                     Icon(Icons.Default.DeleteSweep, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Clear")
                 }
             }
         }
         var lastDay = ""
-        records.forEachIndexed { index, r ->
+        shownRecords.forEachIndexed { index, r ->
             val day = dayLabel(r.at)
             if (day != lastDay) {
                 lastDay = day
@@ -550,6 +563,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                             append(" · ")
                             append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
                             if (r.durationSec > 0) append(" · ").append(duration(r.durationSec))
+                            append(" · ").append(r.simIdentity?.description() ?: "SIM")
                             if (name.isNotEmpty() && r.number.isNotEmpty()) append(" · ").append(r.number)
                         })
                     },
