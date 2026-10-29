@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.CheckCircle
@@ -265,7 +266,7 @@ class MainActivity : ComponentActivity() {
                                     MainTab.HOME -> Icons.Default.Hub
                                     MainTab.CALLS -> Icons.Default.Call
                                     MainTab.UPDATE -> Icons.Default.Download
-                                    MainTab.LOGS -> Icons.Default.Settings
+                                    MainTab.LOGS -> Icons.Rounded.Article
                                     MainTab.SETTINGS -> if (showingPermissions) Icons.Default.CheckCircle else Icons.Default.Settings
                                 },
                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
@@ -498,6 +499,7 @@ class MainActivity : ComponentActivity() {
                     ListItem(
                         headlineContent = { Text("Logs") },
                         supportingContent = { Text("Persistent diagnostics and crash reports") },
+                        leadingContent = { Icon(Icons.Rounded.Article, contentDescription = null) },
                         modifier = Modifier.clickable { screen = MainTab.LOGS },
                     )
                     HorizontalDivider()
