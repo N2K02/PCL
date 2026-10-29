@@ -1117,7 +1117,13 @@ class LinkService : Service() {
                     callName = CallerId.asName(lookupName(callNumber))
                 }
                 callDirection = p.getOrElse(4) { "" }
-                CallHistory.onSimState(callState, callNumber, callName)
+                val slot = p.getOrNull(5)?.toIntOrNull()?.takeIf { it in 0..3 }
+                callSimIdentity = slot?.let {
+                    SimCallIdentity(it,
+                        p.getOrNull(6)?.let(::decodeText).orEmpty(),
+                        p.getOrNull(7)?.let(::decodeText).orEmpty())
+                }
+                CallHistory.onSimState(callState, callNumber, callName, callSimIdentity)
                     ?.takeIf { it.type == CallHistory.Type.MISSED }
                     ?.let(::showMissedCall)
                 onRemoteCallUpdate(previousState)
@@ -1279,6 +1285,9 @@ class LinkService : Service() {
     // ---------------------------------------------------------------- gateway: SIM calls
 
     @Volatile private var simCallStartedMs = 0L
+    /** Verified subscription only. Never use the default DATA SIM as a guess. */
+    @Volatile var callSimIdentity: SimCallIdentity? = null
+        private set
 
     fun simCallStartedAt(): Long = simCallStartedMs
 
@@ -1293,9 +1302,23 @@ class LinkService : Service() {
                 TelephonyManager.EXTRA_STATE_OFFHOOK -> CALL_OFFHOOK
                 else -> CALL_IDLE
             }
-            if (newState == CALL_RINGING && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "INCOMING"; callNumber = ""; callName = "" }
-            else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "OUTGOING" }
-            else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
+            if (newState == CALL_RINGING && previousState == CALL_IDLE) {
+                simCallStartedMs = System.currentTimeMillis()
+                callDirection = "INCOMING"
+                callNumber = ""
+                callName = ""
+                callSimIdentity = SimCallDetector.identify(this@LinkService, newState)
+            } else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) {
+                simCallStartedMs = System.currentTimeMillis()
+                callDirection = "OUTGOING"
+                callSimIdentity = SimCallDetector.identify(this@LinkService, newState)
+            } else if (newState == CALL_OFFHOOK && previousState == CALL_RINGING &&
+                callSimIdentity == null) {
+                callSimIdentity = SimCallDetector.identify(this@LinkService, newState)
+            } else if (newState == CALL_IDLE) {
+                simCallStartedMs = 0L
+                callDirection = ""
+            }
             val gotNumber = !num.isNullOrEmpty() && num != callNumber
             val verifiedNumber = CallerId.asNumber(num)
             if (verifiedNumber.isNotEmpty()) {
@@ -1312,6 +1335,7 @@ class LinkService : Service() {
             if (newState == CALL_IDLE) {
                 callNumber = ""
                 callName = ""
+                callSimIdentity = null
             }
             Hub.notifyUi()
         }
@@ -1347,7 +1371,13 @@ class LinkService : Service() {
                 callState = current
                 // A snapshot cannot reliably identify call direction or caller number.
                 callDirection = ""
-                if (current == CALL_IDLE) { callNumber = ""; callName = "" }
+                if (current == CALL_IDLE) {
+                    callNumber = ""
+                    callName = ""
+                    callSimIdentity = null
+                } else {
+                    callSimIdentity = SimCallDetector.identify(this, current)
+                }
                 Hub.log("Initial phone state: $current (details may be unavailable)")
                 sendCallState()
             }
@@ -1426,7 +1456,15 @@ class LinkService : Service() {
     }
 
     private fun sendCallState() {
-        if (writer != null) send("CALL", callState, callNumber, callName, callDirection)
+        if (writer != null) {
+            val sim = callSimIdentity
+            // Append optional SIM fields; older peers ignore them and keep the
+            // original CALL state/number/name/direction field ordering.
+            send("CALL", callState, callNumber, callName, callDirection,
+                sim?.slotIndex?.toString().orEmpty(),
+                encodeText(sim?.displayName.orEmpty()),
+                encodeText(sim?.carrier.orEmpty()))
+        }
     }
 
     @SuppressLint("MissingPermission")
