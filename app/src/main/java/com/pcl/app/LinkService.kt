@@ -1162,7 +1162,8 @@ class LinkService : Service() {
                 availableSimSlots = p.getOrNull(8).orEmpty().split(",")
                     .mapNotNull { it.toIntOrNull()?.takeIf { slot -> slot in 0..1 } }
                     .toSet()
-                CallHistory.onSimState(callState, callNumber, callName, callSimIdentity)
+                CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
+                    p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L })
                     ?.takeIf { it.type == CallHistory.Type.MISSED }
                     ?.let(::showMissedCall)
                 onRemoteCallUpdate(previousState)
@@ -1477,7 +1478,7 @@ class LinkService : Service() {
             callState = newState
             if (changed || gotNumber || simChanged) {
                 Hub.log("Phone call: $newState (${logCaller()})")
-                sendCallState()
+                sendCallState(if (newState == CALL_IDLE) completedStart else null)
             }
             if (newState == CALL_IDLE) {
                 callNumber = ""
@@ -1606,7 +1607,7 @@ class LinkService : Service() {
         return resolved
     }
 
-    private fun sendCallState() {
+    private fun sendCallState(completedStart: Long? = null) {
         if (writer != null) {
             val sim = callSimIdentity
             // Append optional SIM fields; older peers ignore them and keep the
@@ -1615,7 +1616,8 @@ class LinkService : Service() {
                 sim?.slotIndex?.toString().orEmpty(),
                 encodeText(sim?.displayName.orEmpty()),
                 encodeText(sim?.carrier.orEmpty()),
-                SimDialAccounts.availableSlots(this).sorted().joinToString(","))
+                SimDialAccounts.availableSlots(this).sorted().joinToString(","),
+                (completedStart ?: simCallStartedMs).takeIf { it > 0L }?.toString().orEmpty())
         }
     }
 
