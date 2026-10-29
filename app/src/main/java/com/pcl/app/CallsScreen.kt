@@ -668,7 +668,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             }
         }
         item {
-            Text("SIM call statistics · saved history", style = MaterialTheme.typography.titleSmall,
+            Text("SIM statistics · last 100 saved calls", style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.padding(top = 8.dp, bottom = 6.dp))
             BoxWithConstraints(Modifier.fillMaxWidth()) {
