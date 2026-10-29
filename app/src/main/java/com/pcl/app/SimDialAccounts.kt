@@ -40,23 +40,33 @@ internal object SimDialAccounts {
                 ?: return Selection(null, Unavailable.NO_VERIFIED_ACCOUNT)
             val telephony = context.getSystemService(TelephonyManager::class.java)
                 ?: return Selection(null, Unavailable.NO_VERIFIED_ACCOUNT)
-            val ids = sm.activeSubscriptionInfoList.orEmpty()
-                .filter { it.simSlotIndex == slot && it.subscriptionId >= 0 }
-                .map { it.subscriptionId }.distinct()
-            if (ids.size != 1) return Selection(null, Unavailable.NO_SUBSCRIPTION)
-            val subscription = ids.single()
-            val candidates = telecom.callCapablePhoneAccounts.orEmpty().filter { handle ->
-                val account = telecom.getPhoneAccount(handle) ?: return@filter false
-                if (!account.hasCapabilities(PhoneAccount.CAPABILITY_SIM_SUBSCRIPTION) ||
-                    !account.supportedUriSchemes.contains(PhoneAccount.SCHEME_TEL)) {
-                    return@filter false
-                }
-                telephony.getSubscriptionId(handle) == subscription
+            val subs = sm.activeSubscriptionInfoList.orEmpty().map {
+                SimDialAccountPolicy.Subscription(it.subscriptionId, it.simSlotIndex)
             }
-            when (candidates.size) {
-                1 -> Selection(candidates.single())
-                0 -> Selection(null, Unavailable.NO_VERIFIED_ACCOUNT)
-                else -> Selection(null, Unavailable.AMBIGUOUS_ACCOUNT)
+            if (subs.count { it.slot == slot && it.id >= 0 } != 1) {
+                return Selection(null, Unavailable.NO_SUBSCRIPTION)
+            }
+            val handles = telecom.callCapablePhoneAccounts.orEmpty()
+            val accounts = handles.map { handle ->
+                val account = telecom.getPhoneAccount(handle)
+                val simCapable = account?.hasCapabilities(
+                    PhoneAccount.CAPABILITY_SIM_SUBSCRIPTION) == true
+                val tel = account?.supportedUriSchemes?.contains(PhoneAccount.SCHEME_TEL) == true
+                val subId = if (simCapable && tel) runCatching {
+                    telephony.getSubscriptionId(handle)
+                }.getOrNull() else null
+                SimDialAccountPolicy.Account(subId, simCapable, tel)
+            }
+            val matching = accounts.indices.count { index ->
+                val a = accounts[index]
+                a.simCapable && a.supportsTel &&
+                    subs.any { it.slot == slot && it.id == a.mappedSubscriptionId }
+            }
+            val selected = SimDialAccountPolicy.choose(slot, subs, accounts)
+            when {
+                selected != null -> Selection(handles[selected])
+                matching > 1 -> Selection(null, Unavailable.AMBIGUOUS_ACCOUNT)
+                else -> Selection(null, Unavailable.NO_VERIFIED_ACCOUNT)
             }
         }.getOrElse { Selection(null, Unavailable.NO_VERIFIED_ACCOUNT) }
     }
