@@ -317,6 +317,7 @@ class MainActivity : ComponentActivity() {
                         callDisplay = service?.display().orEmpty(),
                         simStatus = service?.callControlError,
                         simIdentity = service?.callSimIdentity,
+                        availableSimSlots = service?.availableSimSlots ?: emptySet(),
                         simOnGateway = service?.simCallOnGateway == true,
                         whatsappStatus = service?.whatsappCallStatus,
                         mirrorCall = service?.liveMirrorCall,
