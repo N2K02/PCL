@@ -781,7 +781,7 @@ private fun RecentCallBadges(call: CallHistory.Record) {
     val outgoing = if (dark) Color(0xFF9ECFFF) else Color(0xFF215D9B)
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val app = call.sourceApp ?: if (call.whatsapp) "WhatsApp" else null
-    val source = if (app != null) app else call.simIdentity?.badge() ?: "SIM"
+    val source = RecentCallPresentation.source(app, call.whatsapp, call.simIdentity)
     val sourceTint = if (app != null) {
         if (app.contains("WhatsApp", ignoreCase = true)) incoming
         else MaterialTheme.colorScheme.tertiary
@@ -804,13 +804,7 @@ private fun RecentCallBadges(call: CallHistory.Record) {
             tint = sourceTint,
         )
         RecentCallChip(
-            label = when (call.type) {
-                CallHistory.Type.INCOMING -> "Incoming"
-                CallHistory.Type.OUTGOING -> "Outgoing"
-                CallHistory.Type.MISSED -> "Missed"
-                CallHistory.Type.DECLINED -> "Declined"
-                CallHistory.Type.WHATSAPP -> "Call"
-            },
+            label = RecentCallPresentation.outcome(call.type),
             icon = typeIcon(call.type),
             tint = directionTint,
         )
