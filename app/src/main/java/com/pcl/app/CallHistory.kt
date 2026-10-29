@@ -272,6 +272,7 @@ object CallHistory {
     fun onSimState(
         state: String, number: String, name: String,
         sim: SimCallIdentity? = null,
+        gatewayStartedAt: Long? = null,
     ): Record? {
         if (!recovery.shouldTrack(state)) return null
         val verifiedNumber = CallerId.asNumber(number)
@@ -279,13 +280,15 @@ object CallHistory {
             if (verifiedNumber.isEmpty() && CallerId.isPrivate(name)) CallerId.PRIVATE
             else ""
         }
-        return onVerifiedSimState(state, verifiedNumber, verifiedName, sim)
+        return onVerifiedSimState(state, verifiedNumber, verifiedName, sim,
+            gatewayStartedAt?.takeIf { it > 0L })
     }
 
     @Synchronized
     private fun onVerifiedSimState(
         state: String, number: String, name: String,
         sim: SimCallIdentity?,
+        gatewayStartedAt: Long?,
     ): Record? {
         val previous = lastState
         if (state == previous) {
@@ -304,7 +307,7 @@ object CallHistory {
                 ringingNumber = number
                 ringingName = name
                 ringingSim = sim
-                startedAt = now
+                startedAt = gatewayStartedAt ?: now
                 answered = false
                 declinedHere = false
                 connectedSince = 0L
@@ -321,7 +324,7 @@ object CallHistory {
                     val recentDial = now - lastDialAt < 90_000L
                     ringingNumber = number.ifEmpty { if (recentDial) lastDialNumber else "" }
                     ringingName = name.ifEmpty { if (recentDial) lastDialName else "" }
-                    startedAt = now
+                    startedAt = gatewayStartedAt ?: now
                     ringingSim = sim
                     answered = false
                 }
