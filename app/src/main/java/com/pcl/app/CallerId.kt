@@ -83,7 +83,7 @@ object CallerId {
     /** The only values allowed as primary caller information on every PCL screen. */
     fun display(name: String?, number: String?, fallback: String): String {
         val realName = asName(name)
-        val realNumber = asNumber(number)
+        val realNumber = asNumber(number).ifEmpty { asNumber(name) }
         return when {
             realName.isNotEmpty() -> realName
             realNumber.isNotEmpty() -> realNumber
@@ -96,7 +96,7 @@ object CallerId {
      *  detail when both are genuine, without exposing placeholder values. */
     fun displayWithNumber(name: String?, number: String?, fallback: String): String {
         val realName = asName(name)
-        val realNumber = asNumber(number)
+        val realNumber = asNumber(number).ifEmpty { asNumber(name) }
         return when {
             realName.isNotEmpty() && realNumber.isNotEmpty() -> "$realName ($realNumber)"
             else -> display(name, number, fallback)
