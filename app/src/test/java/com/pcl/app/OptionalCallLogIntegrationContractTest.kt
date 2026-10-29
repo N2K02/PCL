@@ -17,7 +17,8 @@ class OptionalCallLogIntegrationContractTest {
 
     @Test fun callLogReaderBoundsAndMatchesBeforeRelaying() {
         val reader = source("OptionalSimCallLog")
-        assertTrue(reader.contains("list.size < 40"))
+        assertTrue(reader.contains("list.size < 41"))
+        assertTrue(reader.contains("if (list.size > 40) emptyList() else list"))
         assertTrue(reader.contains("SimCallLogMatch.choose("))
         assertTrue(reader.contains("knownSim.slotIndex != loggedSim.slotIndex"))
         assertTrue(reader.contains("?.activeSubscriptionInfoList.orEmpty()"))
