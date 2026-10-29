@@ -334,7 +334,6 @@ class MainActivity : ComponentActivity() {
             } else if (screen == MainTab.LOGS) {
                 PCLLogsPage(
                     modifier = Modifier.fillMaxSize().padding(insets),
-                    onBack = { screen = MainTab.SETTINGS },
                 )
             } else Column(
                 Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState())
