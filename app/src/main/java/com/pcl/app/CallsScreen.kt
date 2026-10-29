@@ -126,6 +126,7 @@ class CallsUi(
 
 class CallsActions(
     val simCall: (number: String, name: String) -> Unit,
+    val simCallFromSlot: (number: String, name: String, slot: Int) -> Unit = { _, _, _ -> },
     val whatsappCall: (number: String, name: String) -> Unit,
     val answer: () -> Unit,
     val reject: () -> Unit,
