@@ -113,6 +113,7 @@ class CallsUi(
     val gatewayMaxVolume: Int,
     val gatewayAudioRoute: String,
     val gatewayVolumeMode: String,
+    val availableSimSlots: Set<Int> = emptySet(),
 )
 
 class CallsActions(
@@ -125,6 +126,7 @@ class CallsActions(
     val setGatewayVolumeMode: (String) -> Unit,
     val setGatewayRoute: (String) -> Unit,
     val refreshGatewayAudio: () -> Unit,
+    val simCallFromSlot: (number: String, name: String, slot: Int) -> Unit = { _, _, _ -> },
 )
 
 private enum class CallsSection(val label: String, val icon: ImageVector) {
@@ -534,7 +536,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
         }
         item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("${shownRecords.size} of ${records.size} SIM calls", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                Text("${shownRecords.size} saved SIM calls (latest 100)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 TextButton(onClick = { confirmClear = true }) {
                     Icon(Icons.Default.DeleteSweep, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Clear")
                 }
@@ -573,14 +575,24 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                                 MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
                     },
                     trailingContent = {
-                        if (RecentCallNumber.isDialable(r.number)) {
+                        val flags = RecentCallActionsPolicy.availability(
+                            r, ui.connected, ui.callState == LinkService.CALL_IDLE, ui.availableSimSlots)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (flags.quickCall) {
                             IconButton(
                                 onClick = { actions.simCall(r.number, name) },
-                                enabled = ui.connected,
+                                enabled = flags.quickCall,
                             ) {
                                 Icon(Icons.Default.Call, contentDescription = "Call ${r.number}",
                                     tint = MaterialTheme.colorScheme.primary)
                             }
+                        }
+                        if (flags.simOne) TextButton(onClick = {
+                            actions.simCallFromSlot(r.number, name, 0)
+                        }) { Text("SIM 1") }
+                        if (flags.simTwo) TextButton(onClick = {
+                            actions.simCallFromSlot(r.number, name, 1)
+                        }) { Text("SIM 2") }
                         }
                     },
                 )
@@ -592,7 +604,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             onDismissRequest = { confirmClear = false },
             title = { Text("Clear call history?") },
             text = { Text("This removes the list on this phone only. The Gateway's own call log isn't touched.") },
-            confirmButton = { TextButton(onClick = { CallHistory.clear(); confirmClear = false }) { Text("Clear") } },
+            confirmButton = { TextButton(onClick = { CallHistory.clearSim(); confirmClear = false }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
         )
     }

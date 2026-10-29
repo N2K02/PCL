@@ -318,9 +318,11 @@ class MainActivity : ComponentActivity() {
                         gatewayMaxVolume = service?.gatewayMaxVolume ?: 1,
                         gatewayAudioRoute = service?.gatewayAudioRoute ?: "UNKNOWN",
                         gatewayVolumeMode = service?.gatewayVolumeMode ?: "AUTO",
+                        availableSimSlots = service?.availableSimSlots.orEmpty(),
                     ),
                     actions = CallsActions(
                         simCall = { number, name -> service?.dial(number, name) },
+                        simCallFromSlot = { number, name, slot -> service?.dialWithSim(number, name, slot) },
                         answer = { service?.answer() },
                         reject = { service?.reject() },
                         hangUp = { service?.hangUp() },
@@ -496,6 +498,17 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.clickable { if (setupReady) screen = MainTab.CALLS },
                         )
                     }
+                    if (!remote) ListItem(
+                        headlineContent = { Text("Call history (optional)") },
+                        supportingContent = { Text(if (granted(Manifest.permission.READ_CALL_LOG))
+                            "Verified SIM call history enrichment enabled" else
+                            "Allow optional Call Log access; installer must allowlist restricted permission") },
+                        leadingContent = { Icon(Icons.Default.History, null) },
+                        modifier = Modifier.clickable {
+                            if (!granted(Manifest.permission.READ_CALL_LOG))
+                                requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 91)
+                        },
+                    )
                     ListItem(
                         headlineContent = { Text("Logs") },
                         supportingContent = { Text("Persistent diagnostics and crash reports") },

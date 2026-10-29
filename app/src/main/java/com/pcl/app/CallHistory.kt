@@ -275,17 +275,7 @@ object CallHistory {
         sim: SimCallIdentity? = null,
         gatewayStartedAt: Long? = null,
     ): Record? {
-        if (state == LinkService.CALL_IDLE && lastState == LinkService.CALL_IDLE &&
-            RecentCallNumber.isDialable(number)) {
-            val latest = _records.value.firstOrNull()
-            if (latest != null && latest.number.isBlank() &&
-                System.currentTimeMillis() - latest.at in 0..120_000L) {
-                val normalized = normalize(latest.copy(number = number, name = name))
-                val updated = listOf(normalized) + _records.value.drop(1)
-                _records.value = updated
-                save(updated)
-            }
-        }
+        // Late SIM metadata is accepted only through the verified, unique CALL_LOGGED ACK path.
         if (!recovery.shouldTrack(state)) return null
         val verifiedNumber = CallerId.asNumber(number)
         val verifiedName = CallerId.asName(name).ifEmpty {

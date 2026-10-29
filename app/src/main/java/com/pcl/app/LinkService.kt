@@ -44,6 +44,10 @@ import java.io.DataInputStream
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ArrayBlockingQueue
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -330,7 +334,9 @@ class LinkService : Service() {
         private set
     @Volatile var callName: String = ""
         private set
-    private var callSimIdentity: SimCallIdentity? = null
+    @Volatile private var callSimIdentity: SimCallIdentity? = null
+    @Volatile var availableSimSlots: Set<Int> = emptySet()
+        private set
     @Volatile var callDirection: String = ""
         private set
     @Volatile var callControlError: String? = null
@@ -404,6 +410,10 @@ class LinkService : Service() {
     @Volatile private var writer: FrameWriter? = null
     private var worker: Thread? = null
     private val io = Executors.newSingleThreadExecutor()
+    // Optional CallLog I/O must never delay Bluetooth command processing.
+    private val callLogExecutor = ThreadPoolExecutor(
+        1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(8))
+    private val pendingCallLogTasks = mutableSetOf<Runnable>()
     private var receiverRegistered = false
     private var ringtone: Ringtone? = null
 
@@ -432,6 +442,7 @@ class LinkService : Service() {
     override fun onDestroy() {
         shutdown()
         io.shutdownNow()
+        callLogExecutor.shutdownNow()
         Hub.service = null
         Hub.notifyUi()
         super.onDestroy()
@@ -547,6 +558,28 @@ class LinkService : Service() {
         }
     }
 
+    /** Directed SIM calling is only available with a verified voice account. */
+    fun dialWithSim(number: String, name: String, slot: Int) {
+        if (slot !in 0..1) {
+            callControlError = "FAILED: Invalid SIM slot"
+            Hub.notifyUi()
+            return
+        }
+        if (role == ROLE_GATEWAY) {
+            gatewayDial(number, slot)
+        } else if (peerProtocol == null || peerProtocol!! < 9) {
+            callControlError = "FAILED: Update the Gateway to support verified SIM selection"
+            Hub.notifyUi()
+        } else if (slot !in availableSimSlots) {
+            callControlError = "FAILED: Selected SIM does not have a verified voice account"
+            Hub.notifyUi()
+        } else {
+            CallHistory.onDialRequested(number, name)
+            simDialAt = SystemClock.elapsedRealtime()
+            requestGateway("DIAL_SIM", number, slot)
+        }
+    }
+
     /** Ask the Gateway to refresh the Remote's offline contact cache. */
     fun syncContacts() {
         if (role == ROLE_GATEWAY) {
@@ -559,7 +592,7 @@ class LinkService : Service() {
         }
     }
 
-    private fun requestGateway(command: String, argument: String = "") {
+    private fun requestGateway(command: String, argument: String = "", selectedSlot: Int? = null) {
         if (!connected) {
             callControlError = "FAILED: Bluetooth is disconnected"
             Hub.log("Call control failed: Bluetooth is disconnected")
@@ -567,7 +600,12 @@ class LinkService : Service() {
             return
         }
         callControlError = "PENDING: Waiting for Gateway confirmation"
-        if (command == "DIAL") send(command, argument) else send(command)
+        when (command) {
+            "DIAL" -> send(command, argument)
+            "DIAL_SIM" -> if (selectedSlot != null) send(command, argument, selectedSlot.toString())
+            else return
+            else -> send(command)
+        }
         val request = ++callControlRequest
         trafficHandler.postDelayed({
             // No answer at all: say so instead of waiting forever.
@@ -730,7 +768,10 @@ class LinkService : Service() {
             if (role == ROLE_REMOTE) {
                 if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
                 stopRinging()
+                CallHistory.onLinkLost()
                 callState = CALL_IDLE
+                callSimIdentity = null
+                availableSimSlots = emptySet()
                 nm.cancel(ID_INCOMING)
             }
         }
@@ -747,6 +788,10 @@ class LinkService : Service() {
     private fun shutdown() {
         if (!running && worker == null) return
         running = false
+        if (role == ROLE_REMOTE) CallHistory.onLinkLost()
+        pendingCallLogTasks.forEach(trafficHandler::removeCallbacks)
+        pendingCallLogTasks.clear()
+        callLogExecutor.queue.clear()
         trafficHandler.removeCallbacks(trafficSampler)
         downloadBytesPerSecond = 0L; uploadBytesPerSecond = 0L
         generation++
@@ -819,6 +864,8 @@ class LinkService : Service() {
                 helloReceived = true
                 Hub.log("Peer is the $arg1 phone (PCL ${peerAppVersion.ifEmpty { "older version" }})")
                 versionWarning?.let { Hub.log("Version mismatch: $it") }
+                if (role == ROLE_GATEWAY && peerProtocol != null &&
+                    peerProtocol!! >= 9 && arg1 == ROLE_REMOTE) sendPendingSimEnrichment()
             }
             // gateway -> remote
             "CALL" -> {
@@ -843,15 +890,47 @@ class LinkService : Service() {
                     SimCallIdentity(it, p.getOrNull(6)?.let(::decodeText).orEmpty(),
                         p.getOrNull(7)?.let(::decodeText).orEmpty())
                 }
+                availableSimSlots = p.getOrNull(8).orEmpty().split(",")
+                    .mapNotNull { it.toIntOrNull()?.takeIf { index -> index in 0..1 } }
+                    .toSet()
                 CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
                     p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L })
 
                 onRemoteCallUpdate(previousState)
             }
+            "CALL_LOGGED" -> {
+                val started = arg1.toLongOrNull() ?: return
+                val direction = p.getOrNull(8).orEmpty()
+                val id = p.getOrNull(9).orEmpty()
+                if (direction !in setOf("INCOMING", "OUTGOING") ||
+                    id != "${started}_${direction}") return
+                val number = CallerId.asNumber(p.getOrNull(2)?.let(::decodeText))
+                val name = p.getOrNull(3)?.let(::decodeText).orEmpty()
+                val withheld = p.getOrNull(4) == "1"
+                val slot = p.getOrNull(5)?.toIntOrNull()?.takeIf { it in 0..3 }
+                val sim = slot?.let {
+                    SimCallIdentity(it, p.getOrNull(6)?.let(::decodeText).orEmpty(),
+                        p.getOrNull(7)?.let(::decodeText).orEmpty())
+                }
+                if (CallHistory.amendSim(started, number, name, withheld, sim, direction) != null) {
+                    send("CALL_LOG_ACK", id)
+                    Hub.log("Verified SIM call history updated")
+                }
+                Hub.notifyUi()
+            }
+            "CALL_LOG_ACK" -> {
+                if (role == ROLE_GATEWAY) PendingSimEnrichment.acknowledge(this, arg1)
+            }
             // remote -> gateway
             "ANSWER" -> { gatewayAnswer(); sendCallResult() }
             "REJECT", "HANGUP" -> { gatewayEnd(rejectRinging = cmd == "REJECT"); sendCallResult() }
             "DIAL" -> { gatewayDial(arg1); sendCallResult() }
+            "DIAL_SIM" -> {
+                val slot = p.getOrNull(2)?.toIntOrNull()?.takeIf { it in 0..1 }
+                if (slot == null) callControlError = "FAILED: Invalid SIM slot"
+                else gatewayDial(arg1, slot)
+                sendCallResult()
+            }
             "SYNC_CONTACTS" -> sendContacts()
             "AUDIO_QUERY" -> gatewayAudioStatus()
             "AUDIO_MODE" -> gatewaySetVolumeMode(arg1, p.getOrNull(2).orEmpty())
@@ -940,6 +1019,66 @@ class LinkService : Service() {
 
     fun simCallStartedAt(): Long = simCallStartedMs
 
+    private fun sendPendingSimEnrichment() {
+        if (!connected || writer == null || role != ROLE_GATEWAY ||
+            peerProtocol == null || peerProtocol!! < 9) return
+        PendingSimEnrichment.snapshot(this).forEach { entry ->
+            send("CALL_LOGGED", entry.startedAt.toString(),
+                encodeText(entry.number), encodeText(entry.name),
+                if (entry.privateCaller) "1" else "0",
+                entry.simSlot?.toString().orEmpty(),
+                encodeText(entry.simName), encodeText(entry.carrier),
+                entry.direction, entry.id)
+        }
+    }
+
+    /** One bounded lookup with one retry; the phone's CallLog provider must
+     *  never block the Bluetooth writer/receiver, even if it hangs for seconds.
+     */
+    private fun enrichCompletedSimCall(
+        startedAt: Long, direction: String, number: String, sim: SimCallIdentity?,
+    ) {
+        if (!running || role != ROLE_GATEWAY || !OptionalSimCallLog.canRead(this) ||
+            startedAt <= 0L || direction !in setOf("INCOMING", "OUTGOING")) return
+        val currentGeneration = generation
+        fun schedule(delayMs: Long, retry: Boolean) {
+            lateinit var task: Runnable
+            task = Runnable {
+                pendingCallLogTasks.remove(task)
+                if (!running || generation != currentGeneration ||
+                    role != ROLE_GATEWAY || !OptionalSimCallLog.canRead(this)) return@Runnable
+                try {
+                    callLogExecutor.execute {
+                        if (!running || generation != currentGeneration) return@execute
+                        val match = OptionalSimCallLog.read(this, startedAt, direction, number, sim)
+                        trafficHandler.post {
+                            if (!running || generation != currentGeneration) return@post
+                            if (match == null) {
+                                if (retry) schedule(10_000L, false)
+                                return@post
+                            }
+                            val entry = PendingSimEnrichment.Entry(
+                                startedAt, direction, match.number, match.name,
+                                match.privateCaller, match.sim?.slotIndex,
+                                match.sim?.displayName.orEmpty(),
+                                match.sim?.carrier.orEmpty(), System.currentTimeMillis())
+                            PendingSimEnrichment.add(this, entry)
+                            sendPendingSimEnrichment()
+                            Hub.log("SIM call history details queued for reliable Remote sync")
+                        }
+                    }
+                } catch (_: RejectedExecutionException) {
+                    Hub.log("Optional call history queue full; active call controls unaffected")
+                }
+            }
+            pendingCallLogTasks.add(task)
+            trafficHandler.postDelayed(task, delayMs)
+        }
+        schedule(2_500L, true)
+    }
+
+
+
     private val phoneReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             val st = i.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
@@ -953,6 +1092,8 @@ class LinkService : Service() {
             }
             val priorStart = simCallStartedMs
             val priorDirection = callDirection
+            val priorNumber = callNumber
+            val priorSim = callSimIdentity
             if (newState == CALL_RINGING && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "INCOMING"; callNumber = ""; callName = "" }
             else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "OUTGOING" }
             else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
@@ -968,9 +1109,12 @@ class LinkService : Service() {
             callState = newState
             if (changed || gotNumber) {
                 Hub.log("Phone call: $newState (${logCaller()})")
-                sendCallState()
+                sendCallState(if (newState == CALL_IDLE) priorStart else null)
             }
             if (newState == CALL_IDLE) {
+                if (changed && priorStart > 0L) {
+                    enrichCompletedSimCall(priorStart, priorDirection, priorNumber, priorSim)
+                }
                 callNumber = ""
                 callName = ""
                 callSimIdentity = null
@@ -1125,37 +1269,51 @@ class LinkService : Service() {
             android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE), Charsets.UTF_8)
     } catch (_: Exception) { "" }
 
-    private fun sendCallState() {
+    private fun sendCallState(completedStart: Long? = null) {
         if (writer != null) {
             val sim = callSimIdentity
             send("CALL", callState, callNumber, callName, callDirection,
                 sim?.slotIndex?.toString().orEmpty(), encodeText(sim?.displayName.orEmpty()),
                 encodeText(sim?.carrier.orEmpty()),
                 SimDialAccounts.availableSlots(this).sorted().joinToString(","),
-                simCallStartedMs.takeIf { it > 0L }?.toString().orEmpty())
+                (completedStart ?: simCallStartedMs).takeIf { it > 0L }?.toString().orEmpty())
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun gatewayDial(number: String) {
-        val n = number.trim()
-        if (n.isEmpty()) { callControlError = "FAILED: Empty phone number"; return }
+    private fun gatewayDial(number: String, selectedSlot: Int? = null) {
+        val n = CallerId.asNumber(number)
+        if (n.isEmpty()) { callControlError = "FAILED: Invalid SIM phone number"; return }
         if (!has(Manifest.permission.CALL_PHONE)) {
             callControlError = "FAILED: Phone permission missing on Gateway"
-            Hub.log("Dial failed: 'Phone' permission missing on gateway")
             return
         }
         try {
+            val extras = Bundle()
+            if (selectedSlot != null) {
+                if (callState != CALL_IDLE) {
+                    callControlError = "FAILED: Cannot select SIM during an active call"
+                    return
+                }
+                val selection = SimDialAccounts.select(this, selectedSlot)
+                val handle = selection.handle
+                if (handle == null) {
+                    callControlError = "FAILED: SIM ${selectedSlot + 1} cannot be verified (${selection.reason})"
+                    Hub.log("SIM selection rejected: ${selection.reason}")
+                    return
+                }
+                extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
+            }
             callNumber = n
             callName = lookupName(n)
             callDirection = "OUTGOING"
             getSystemService(TelecomManager::class.java)!!
-                .placeCall(Uri.fromParts("tel", n, null), Bundle())
+                .placeCall(Uri.fromParts("tel", n, null), extras)
             callControlError = null
             Hub.log("Dialing ${logCaller(n)}")
         } catch (e: Exception) {
-            callControlError = "FAILED: ${e.message ?: "Android rejected the dial request"}"
-            Hub.log("Dial failed: ${e.message}")
+            callControlError = "FAILED: Android rejected the dial request"
+            Hub.log("SIM dial failed: ${e.javaClass.simpleName}")
         }
     }
 

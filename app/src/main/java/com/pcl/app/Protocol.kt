@@ -26,8 +26,9 @@ object Protocol {
      *  - 5: removed the legacy Wi-Fi hotspot workaround
      *  - 7: SIM-only command surface; third-party calls and notification mirroring removed
      *  - 8: remote-selectable Gateway volume modes and synchronized mode status
+     *  - 9: verified SIM dialing and acknowledged optional CallLog enrichment
      */
-    const val VERSION = 8
+    const val VERSION = 9
 }
 
 /**
@@ -38,13 +39,13 @@ object Protocol {
 object Commands {
     /** Sent by the Remote; handled only on the Gateway. */
     val GATEWAY_HANDLES = setOf(
-        "ANSWER", "REJECT", "HANGUP", "DIAL", "SYNC_CONTACTS",
+        "ANSWER", "REJECT", "HANGUP", "DIAL", "DIAL_SIM", "CALL_LOG_ACK", "SYNC_CONTACTS",
         "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY", "AUDIO_MODE"
     )
 
     /** Sent by the Gateway; handled only on the Remote. */
     val REMOTE_HANDLES = setOf(
-        "CALL", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
+        "CALL", "CALL_LOGGED", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
         "CONTACTS_RESULT", "AUDIO_STATUS", "AUDIO_RESULT"
     )
 }
