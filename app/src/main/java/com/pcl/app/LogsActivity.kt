@@ -7,7 +7,7 @@ import androidx.compose.ui.Modifier
 internal fun PCLLogsPage(modifier: Modifier = Modifier, onBack: () -> Unit) {
     val callActivity by CallLogger.lines.collectAsState()
     N2K02UnifiedLogsPage(
-        modifier = modifier, appName = "PCL", onBack = onBack,
+        modifier = modifier, appName = "PCL",
         extraLabel = "Gateway / Remote activity",
         extraLines = callActivity,
         clearExtra = CallLogger::clear,
