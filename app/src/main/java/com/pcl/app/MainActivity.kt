@@ -328,6 +328,9 @@ class MainActivity : ComponentActivity() {
                     ),
                     actions = CallsActions(
                         simCall = { number, name -> service?.dial(number, name) },
+                        simCallFromSlot = { number, name, slot ->
+                            service?.dialWithSim(number, name, slot)
+                        },
                         whatsappCall = { number, name -> service?.startWhatsAppCall(number, name) },
                         answer = { service?.answer() },
                         reject = { service?.reject() },
