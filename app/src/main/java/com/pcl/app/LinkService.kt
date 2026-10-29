@@ -1100,17 +1100,34 @@ class LinkService : Service() {
             "CONTACTS_END" -> {
                 val data = contactBuf?.toString()
                 contactBuf = null
+                val expectedHash = expectedContactHash
                 if (data == null) {
                     Hub.log("Contact synchronization incomplete; existing contacts retained")
-                } else if (expectedContactHash != null &&
-                    !ContactStore.fingerprint(data).equals(expectedContactHash, ignoreCase = true)) {
-                    Hub.log("Contact synchronization checksum mismatch; existing contacts retained")
-                } else if (ContactStore.saveSynced(this, data)) {
-                    // A failed disk write must never mark this contact snapshot as current.
-                    Prefs.of(this).edit()
-                        .putString(Prefs.CONTACTS_HASH, ContactStore.fingerprint(data)).commit()
-                    Hub.contactsVersion++
-                    Hub.log("Received ${ContactStore.parse(data).size} contacts from gateway")
+                } else if (expectedHash == null) {
+                    Hub.log("Contact synchronization missing a verified checksum; existing contacts retained")
+                } else {
+                    val session = generation
+                    // Hash verification and fsync may be expensive for large address
+                    // books. Never block the socket reader while persisting contacts.
+                    try {
+                        contactsExecutor.execute {
+                            if (!running || generation != session || role != ROLE_REMOTE) return@execute
+                            val hash = ContactStore.fingerprint(data)
+                            if (!hash.equals(expectedHash, ignoreCase = true)) {
+                                Hub.log("Contact synchronization checksum mismatch; existing contacts retained")
+                            } else if (ContactStore.saveSynced(this, data)) {
+                                // Commit the fingerprint only after the full contact file.
+                                if (Prefs.of(this).edit().putString(Prefs.CONTACTS_HASH, hash).commit()) {
+                                    Hub.contactsVersion++
+                                    Hub.log("Received ${ContactStore.parse(data).size} contacts from gateway")
+                                } else {
+                                    Hub.log("Contact snapshot saved; fingerprint update deferred")
+                                }
+                            }
+                        }
+                    } catch (_: RejectedExecutionException) {
+                        Hub.log("Contact synchronization canceled during shutdown")
+                    }
                 }
             }
             "CONTACTS_RESULT" -> {

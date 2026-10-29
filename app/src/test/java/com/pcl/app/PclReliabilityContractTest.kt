@@ -29,6 +29,10 @@ class PclReliabilityContractTest {
         assertTrue(service.contains("if (data == null)"))
         assertTrue(service.contains("checksum mismatch"))
         assertTrue(service.contains("if (ContactStore.saveSynced(this, data))"))
+        assertTrue(service.contains("contactsExecutor.execute {"))
+        assertTrue(service.contains("if (expectedHash == null)"))
+        assertTrue(service.contains("generation != session"))
+        assertTrue(service.contains("putString(Prefs.CONTACTS_HASH, hash).commit()"))
     }
 
     @Test fun onlyAcknowledgedRejectMayConfirmDeclinedHistory() {
@@ -75,7 +79,9 @@ class PclReliabilityContractTest {
 
     @Test fun loggingKeepsLiveRecordsAndSupportsRedactedPersistentDiagnostics() {
         assertTrue(source("CallLogger").contains("if (initialized) return"))
-        assertTrue(source("Protocol").contains("AppLog.add(\"LINK\", safeEvent)"))
+        assertTrue(source("Protocol").contains("AppLog.add(\"LINK\", redacted)"))
+        assertTrue(source("Protocol").contains("android.util.Log.i(\"PCL\", redacted)"))
+        assertTrue(source("Protocol").contains("CallLogger.log(redacted)"))
         assertTrue(source("AppLog").contains("[BT_DEVICE]"))
     }
 }
