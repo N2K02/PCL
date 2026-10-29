@@ -183,6 +183,12 @@ internal fun RecentCallCard(
                         menuVisible = false
                         actions.simCallFromSlot(number, contactName, 1)
                     }
+                    if (flags.quickCall && ui.availableSimSlots.isEmpty()) {
+                        Text("Choose SIM is unsupported on this Gateway: Android did not verify an enabled SIM voice account. Ordinary SIM calling still works.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 22.dp, vertical = 5.dp))
+                    }
                 }
                 HorizontalDivider(Modifier.padding(horizontal = 18.dp, vertical = 6.dp))
                 SheetAction("Share contact", Icons.Default.Share, flags.share) {
