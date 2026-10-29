@@ -26,7 +26,7 @@ object Protocol {
      *  - 4: the Remote can ask the Gateway to start a WhatsApp call (WHATSAPP_CALL)
      *  - 5: the Wi-Fi hotspot workaround is gone (no HOTSPOT_STATE, no WHATSAPP_CALL_TRIGGER)
      */
-    const val VERSION = 6
+    const val VERSION = 7
 }
 
 /**
