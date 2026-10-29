@@ -51,6 +51,9 @@ class SimCallIdentityTest {
         assertNull(SimCallSelection.choose(emptyList(), ring, true))
         assertNull(SimCallSelection.choose(listOf(sim(0, ring), sim(0, ring)), ring, true))
         assertNull(SimCallSelection.choose(listOf(sim(-1, ring)), ring, true))
+        assertNull(SimCallSelection.choose(
+            listOf(sim(0, ring), sim(-1, idle)), ring, true))
+        assertNull(SimCallSelection.choose(listOf(sim(5, ring)), ring, true))
     }
 
     @Test fun carriersAndNamesAreDisplayOnlyNeverCallerNumbers() {
