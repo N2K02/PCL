@@ -979,6 +979,9 @@ class LinkService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun runSession(s: BluetoothSocket, gen: Int) {
+        // A newly started Remote may attach while a SIM call is already active.
+        // Treat the first CALL packet as a snapshot, never a freshly dialed call.
+        if (role == ROLE_REMOTE) CallHistory.onLinkLost()
         socket = s
         val w = FrameWriter(s.outputStream)
         writer = w
