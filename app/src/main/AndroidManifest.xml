@@ -24,6 +24,8 @@
         android:icon="@drawable/ic_pcl"
         android:label="PCL"
         android:theme="@style/Theme.PCL">
+        <provider android:name="com.pcl.app.CrashJournalProvider" android:authorities="${applicationId}.crashjournal" android:exported="false" android:initOrder="100" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
