@@ -184,7 +184,7 @@ object CallHistory {
         val retained = _records.value.filterNot(SimRecentsAnalytics::isSim)
         _records.value = retained
         save(retained)
-        setUnseen(retained.count { it.type == Type.MISSED })
+        setUnseen(0)
     }
 
     /**
