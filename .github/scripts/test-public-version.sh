@@ -26,7 +26,7 @@ printf '%s\n' \
   'refs/tags/pcl-v15.0-build-240' \
   'refs/tags/pcl-v15.0' \
   'refs/tags/pcl-v999.99' \
-  'refs/tags/pcl-v99.9' \
+  'refs/tags/mradio-v99.9' \
   'refs/tags/pcl-experimental-pr-41-run-1000' >> "$tmp/many-refs"
 
 result=$(PATH="$tmp:$PATH" PUBLIC_REFS_FIXTURE="$tmp/many-refs" bash "$resolver" pcl)
