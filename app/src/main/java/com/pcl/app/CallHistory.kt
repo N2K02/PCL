@@ -33,7 +33,15 @@ object CallHistory {
         val whatsapp: Boolean = false,
         /** Original VoIP app for non-WhatsApp third-party call history. */
         val sourceApp: String? = null,
-    )
+        /** Verified SIM slot (zero-based), null if Android could not decide. */
+        val simSlot: Int? = null,
+        val simLabel: String? = null,
+        val carrier: String? = null,
+    ) {
+        val simIdentity: SimCallIdentity? get() = simSlot?.takeIf { it >= 0 }?.let {
+            SimCallIdentity(it, simLabel.orEmpty(), carrier.orEmpty())
+        }
+    }
 
     private const val FILE = "call_history.json"
     private const val MAX = 100
@@ -57,6 +65,7 @@ object CallHistory {
     private var lastState = LinkService.CALL_IDLE
     private var ringingNumber = ""
     private var ringingName = ""
+    private var ringingSim: SimCallIdentity? = null
     private var startedAt = 0L
     private var answered = false
     private var declinedHere = false
@@ -83,6 +92,9 @@ object CallHistory {
                         durationSec = o.optLong("d"),
                         whatsapp = o.optBoolean("w"),
                         sourceApp = o.optString("s").takeIf { it.isNotBlank() && it != "null" },
+                        simSlot = o.optInt("ss", -1).takeIf { it >= 0 },
+                        simLabel = o.optString("sl").takeUnless { it.isBlank() || it == "null" },
+                        carrier = o.optString("sc").takeUnless { it.isBlank() || it == "null" },
                     ))
                 }
             }
@@ -102,11 +114,20 @@ object CallHistory {
             if (number.isEmpty() && CallerId.isPrivate(record.name)) CallerId.PRIVATE
             else ""
         }
+        val validSim = !record.whatsapp && record.sourceApp.isNullOrBlank() &&
+            record.simSlot != null && record.simSlot in 0..3
+        fun label(value: String?): String? = CallerId.clean(value).takeIf {
+            it.isNotBlank() && !CallerId.isPlaceholder(it)
+        }?.take(48)
         return record.copy(number = number, name = name,
             sourceApp = CallerId.clean(record.sourceApp).takeIf {
                 it.isNotBlank() && it.lowercase() !in setOf(
                     "unknown", "unknown number", "unknown caller", "-", "n/a", "null")
-            })
+            },
+            simSlot = record.simSlot.takeIf { validSim },
+            simLabel = label(record.simLabel).takeIf { validSim },
+            carrier = label(record.carrier).takeIf { validSim },
+        )
     }
 
     @Synchronized
@@ -125,7 +146,10 @@ object CallHistory {
             list.forEach { r ->
                 arr.put(JSONObject().put("n", r.number).put("m", r.name).put("t", r.type.name)
                     .put("a", r.at).put("d", r.durationSec).put("w", r.whatsapp)
-                    .put("s", r.sourceApp ?: JSONObject.NULL))
+                    .put("s", r.sourceApp ?: JSONObject.NULL)
+                    .put("ss", r.simSlot ?: JSONObject.NULL)
+                    .put("sl", r.simLabel ?: JSONObject.NULL)
+                    .put("sc", r.carrier ?: JSONObject.NULL))
             }
             File(app.filesDir, FILE).writeText(arr.toString())
         } catch (e: Exception) {
@@ -169,23 +193,30 @@ object CallHistory {
      * Returns the call that just ended, if any.
      */
     @Synchronized
-    fun onSimState(state: String, number: String, name: String): Record? {
+    fun onSimState(
+        state: String, number: String, name: String,
+        sim: SimCallIdentity? = null,
+    ): Record? {
         val verifiedNumber = CallerId.asNumber(number)
         val verifiedName = CallerId.asName(name).ifEmpty {
             if (verifiedNumber.isEmpty() && CallerId.isPrivate(name)) CallerId.PRIVATE
             else ""
         }
-        return onVerifiedSimState(state, verifiedNumber, verifiedName)
+        return onVerifiedSimState(state, verifiedNumber, verifiedName, sim)
     }
 
     @Synchronized
-    private fun onVerifiedSimState(state: String, number: String, name: String): Record? {
+    private fun onVerifiedSimState(
+        state: String, number: String, name: String,
+        sim: SimCallIdentity?,
+    ): Record? {
         val previous = lastState
         if (state == previous) {
             // Ringing may be reported again once the caller's name is known.
             if (state == LinkService.CALL_RINGING || state == LinkService.CALL_OFFHOOK) {
                 if (number.isNotEmpty()) ringingNumber = number
                 if (name.isNotEmpty()) ringingName = name
+                if (ringingSim == null && sim != null) ringingSim = sim
             }
             return null
         }
@@ -195,6 +226,7 @@ object CallHistory {
             LinkService.CALL_RINGING -> {
                 ringingNumber = number
                 ringingName = name
+                ringingSim = sim
                 startedAt = now
                 answered = false
                 declinedHere = false
@@ -205,6 +237,7 @@ object CallHistory {
                 if (previous == LinkService.CALL_RINGING) {
                     if (number.isNotEmpty()) ringingNumber = number
                     if (name.isNotEmpty()) ringingName = name
+                    if (ringingSim == null) ringingSim = sim
                     answered = true
                 } else {
                     // Outgoing: Android may not report the number, so use the last dial request.
@@ -212,11 +245,13 @@ object CallHistory {
                     ringingNumber = number.ifEmpty { if (recentDial) lastDialNumber else "" }
                     ringingName = name.ifEmpty { if (recentDial) lastDialName else "" }
                     startedAt = now
+                    ringingSim = sim
                     answered = false
                 }
             }
             else -> {
                 val talk = if (connectedSince > 0) (SystemClock.elapsedRealtime() - connectedSince) / 1000 else 0
+                val source = ringingSim ?: sim
                 val record = when {
                     previous == LinkService.CALL_RINGING ->
                         Record(ringingNumber, ringingName, if (declinedHere) Type.DECLINED else Type.MISSED, startedAt)
@@ -225,7 +260,9 @@ object CallHistory {
                     previous == LinkService.CALL_OFFHOOK ->
                         Record(ringingNumber, ringingName, Type.OUTGOING, startedAt, talk)
                     else -> null
-                }
+                }?.copy(simSlot = source?.slotIndex,
+                    simLabel = source?.displayName, carrier = source?.carrier)
+                ringingSim = null
                 connectedSince = 0L
                 declinedHere = false
                 record?.let(::add)
