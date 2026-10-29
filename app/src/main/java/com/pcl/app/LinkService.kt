@@ -1140,7 +1140,8 @@ class LinkService : Service() {
                     SimCallIdentity(it, p.getOrNull(6)?.let(::decodeText).orEmpty(),
                         p.getOrNull(7)?.let(::decodeText).orEmpty())
                 }
-                CallHistory.amendSim(started, number, name, withheld, sim)
+                CallHistory.amendSim(
+                    started, number, name, withheld, sim, p.getOrNull(8).orEmpty())
                     ?.let { Hub.log("A completed SIM call received verified call history details") }
                 Hub.notifyUi()
             }
@@ -1336,7 +1337,7 @@ class LinkService : Service() {
                         if (match.privateCaller) "1" else "0",
                         match.sim?.slotIndex?.toString().orEmpty(),
                         encodeText(match.sim?.displayName.orEmpty()),
-                        encodeText(match.sim?.carrier.orEmpty()))
+                        encodeText(match.sim?.carrier.orEmpty()), direction)
                     Hub.log("Optional SIM call history enrichment matched; details sent to Remote")
                 }
             }
