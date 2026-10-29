@@ -31,7 +31,7 @@ object CallerId {
         "voice call", "incoming voice call", "ongoing voice call", "whatsapp voice call",
         "video call", "incoming video call", "whatsapp", "whatsapp business",
         "telegram", "signal", "messenger", "viber", "ongoing video call",
-        "dialing", "dialling", "call", "phone call", "sim call", "private caller id unavailable"
+        "dialing", "dialling", "call", "phone call", "sim", "sim call", "private caller id unavailable"
     )
 
     private val NUMBER = Regex("^\\+?[0-9][0-9() .\\-/]{3,28}[0-9]$")
