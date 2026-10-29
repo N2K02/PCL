@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.provider.ContactsContract
+import android.util.AtomicFile
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -91,17 +92,27 @@ object ContactStore {
             }
         }
 
-    fun saveSynced(ctx: Context, data: String) {
-        try {
-            File(ctx.filesDir, FILE).writeText(data)
+    /** True only after the complete contacts snapshot was atomically committed. */
+    fun saveSynced(ctx: Context, data: String): Boolean {
+        val file = AtomicFile(File(ctx.filesDir, FILE))
+        var stream: java.io.FileOutputStream? = null
+        return try {
+            val output = file.startWrite()
+            stream = output
+            output.write(data.toByteArray(Charsets.UTF_8))
+            file.finishWrite(output)
+            stream = null
+            true
         } catch (e: Exception) {
-            Hub.log("Could not save contacts: ${e.message}")
+            stream?.let { file.failWrite(it) }
+            Hub.log("Could not save contacts: ${e.javaClass.simpleName}")
+            false
         }
     }
 
     fun loadSynced(ctx: Context): List<Contact> = try {
-        val f = File(ctx.filesDir, FILE)
-        if (f.exists()) parse(f.readText()) else emptyList()
+        AtomicFile(File(ctx.filesDir, FILE)).openRead()
+            .bufferedReader(Charsets.UTF_8).use { parse(it.readText()) }
     } catch (e: Exception) {
         emptyList()
     }

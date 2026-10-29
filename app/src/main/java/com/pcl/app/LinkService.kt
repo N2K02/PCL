@@ -425,6 +425,7 @@ class LinkService : Service() {
     @Volatile var simCallOnGateway = false
         private set
     private var contactBuf: StringBuilder? = null
+    private var expectedContactHash: String? = null
 
     val isActive: Boolean get() = running
 
@@ -768,6 +769,7 @@ class LinkService : Service() {
             connected = false
             clearPendingAudioRequests()
             contactBuf = null
+            expectedContactHash = null
             helloReceived = false
             if (role == ROLE_REMOTE) {
                 if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
@@ -968,6 +970,7 @@ class LinkService : Service() {
             }
             // contacts: gateway -> remote
             "CONTACTS_HASH" -> {
+                expectedContactHash = arg1.takeIf { it.matches(Regex("[a-fA-F0-9]{64}")) }
                 val have = Prefs.of(this).getString(Prefs.CONTACTS_HASH, null)
                 if (have == arg1) {
                     Hub.log("Contacts are up to date with the Gateway")
@@ -988,12 +991,20 @@ class LinkService : Service() {
                 }
             }
             "CONTACTS_END" -> {
-                val data = contactBuf?.toString() ?: ""
+                val data = contactBuf?.toString()
                 contactBuf = null
-                ContactStore.saveSynced(this, data)
-                Prefs.of(this).edit().putString(Prefs.CONTACTS_HASH, ContactStore.fingerprint(data)).apply()
-                Hub.contactsVersion++
-                Hub.log("Received ${ContactStore.parse(data).size} contacts from gateway")
+                if (data == null) {
+                    Hub.log("Contact synchronization incomplete; existing contacts retained")
+                } else if (expectedContactHash != null &&
+                    !ContactStore.fingerprint(data).equals(expectedContactHash, ignoreCase = true)) {
+                    Hub.log("Contact synchronization checksum mismatch; existing contacts retained")
+                } else if (ContactStore.saveSynced(this, data)) {
+                    // A failed disk write must never mark this contact snapshot as current.
+                    Prefs.of(this).edit()
+                        .putString(Prefs.CONTACTS_HASH, ContactStore.fingerprint(data)).commit()
+                    Hub.contactsVersion++
+                    Hub.log("Received ${ContactStore.parse(data).size} contacts from gateway")
+                }
             }
             "CONTACTS_RESULT" -> {
                 val detail = p.drop(2).joinToString("|")

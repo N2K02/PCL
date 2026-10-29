@@ -2,6 +2,7 @@ package com.pcl.app
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.AtomicFile
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONArray
@@ -79,9 +80,10 @@ object CallHistory {
         app = context.applicationContext
         loaded = true
         _records.value = try {
-            val f = File(app.filesDir, FILE)
-            if (!f.exists()) emptyList() else {
-                val arr = JSONArray(f.readText())
+            val f = AtomicFile(File(app.filesDir, FILE))
+            val raw = runCatching { f.openRead().bufferedReader(Charsets.UTF_8).use { it.readText() } }.getOrNull()
+            if (raw == null) emptyList() else {
+                val arr = JSONArray(raw)
                 (0 until arr.length()).mapNotNull { i ->
                     val o = arr.optJSONObject(i) ?: return@mapNotNull null
                     normalize(Record(
@@ -131,17 +133,21 @@ object CallHistory {
     }
 
     @Synchronized
-    fun add(record: Record) {
-        if (!loaded) return
+    fun add(record: Record): Boolean {
+        if (!loaded) return false
         val canonical = normalize(record)
         val list = (listOf(canonical) + _records.value).take(MAX)
+        if (!save(list)) return false
         _records.value = list
-        save(list)
         if (canonical.type == Type.MISSED && SimRecentsAnalytics.isSim(canonical))
             setUnseen(_unseenMissed.value + 1)
+        return true
     }
 
-    private fun save(list: List<Record>) {
+    /** AtomicFile retains the previous complete snapshot if the process dies mid-write. */
+    private fun save(list: List<Record>): Boolean {
+        val atomic = AtomicFile(File(app.filesDir, FILE))
+        var stream: java.io.FileOutputStream? = null
         try {
             val arr = JSONArray()
             list.forEach { r ->
@@ -152,9 +158,16 @@ object CallHistory {
                     .put("sl", r.simLabel ?: JSONObject.NULL)
                     .put("sc", r.carrier ?: JSONObject.NULL))
             }
-            File(app.filesDir, FILE).writeText(arr.toString())
+            val output = atomic.startWrite()
+            stream = output
+            output.write(arr.toString().toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(output)
+            stream = null
+            return true
         } catch (e: Exception) {
-            Hub.log("Could not save call history: ${e.message ?: e.javaClass.simpleName}")
+            stream?.let { atomic.failWrite(it) }
+            Hub.log("Could not save call history: ${e.javaClass.simpleName}")
+            return false
         }
     }
 
@@ -170,9 +183,10 @@ object CallHistory {
     @Synchronized
     fun clear() {
         if (!loaded) return
-        _records.value = emptyList()
-        save(emptyList())
-        setUnseen(0)
+        if (save(emptyList())) {
+            _records.value = emptyList()
+            setUnseen(0)
+        }
     }
 
     /** Clear saved SIM records only; preserve legacy VoIP history and contacts. */
@@ -180,9 +194,10 @@ object CallHistory {
     fun clearSim() {
         if (!loaded) return
         val retained = _records.value.filterNot(SimRecentsAnalytics::isSim)
-        _records.value = retained
-        save(retained)
-        setUnseen(0)
+        if (save(retained)) {
+            _records.value = retained
+            setUnseen(0)
+        }
     }
 
     /**
@@ -202,8 +217,8 @@ object CallHistory {
     fun remove(record: Record): Boolean {
         if (!loaded) return false
         val updated = withoutOne(_records.value, record) ?: return false
+        if (!save(updated)) return false
         _records.value = updated
-        save(updated)
         return true
     }
 
@@ -229,8 +244,8 @@ object CallHistory {
         val updated = SimHistoryEnrichment.merge(
             original, number, name, restricted, sim) ?: return original
         val changed = records.toMutableList().also { it[index] = updated }
+        if (!save(changed)) return null // Do not ACK metadata which is not durable.
         _records.value = changed
-        save(changed)
         return updated
     }
 
@@ -347,11 +362,11 @@ object CallHistory {
                 ringingSim = null
                 connectedSince = 0L
                 declinedHere = false
-                record?.let { entry ->
+                val durable = record?.let { entry ->
                     add(if (entry.number.isBlank() && RecentCallNumber.isDialable(number))
                         entry.copy(number = number, name = name) else entry)
-                }
-                return record
+                } ?: false
+                return record.takeIf { durable }
             }
         }
         return null

@@ -11,14 +11,16 @@ import java.util.Locale
 object CallLogger {
     private val lock = Any()
     private lateinit var appContext: Context
+    private var initialized = false
     private val _lines = MutableStateFlow<List<String>>(emptyList())
     val lines: StateFlow<List<String>> = _lines
 
     fun init(context: Context) {
         appContext = context.applicationContext
         synchronized(lock) {
-            _lines.value = emptyList()
-            // Older versions stored logs on disk; remove anything they left behind.
+            if (initialized) return
+            initialized = true
+            // Preserve events the service logged before the Activity opened.
             appContext.getSharedPreferences("call_activity_logs", Context.MODE_PRIVATE)
                 .edit().remove("lines").apply()
         }
