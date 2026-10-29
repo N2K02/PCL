@@ -25,6 +25,7 @@ class RecentCardIntegrationContractTest {
     }
 
     @Test fun sheetHasAllRequestedSafeActionsAndIndividualDeleteConfirmation() {
+        val calls = source("CallsScreen")
         val card = source("RecentCallCard")
         for (label in listOf("Make a quick call", "Call with SIM 1", "Call with SIM 2",
                 "Share contact", "Copy number", "View details",
