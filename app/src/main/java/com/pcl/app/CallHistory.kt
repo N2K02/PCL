@@ -63,6 +63,8 @@ object CallHistory {
 
     // Tracker for the Gateway's SIM call states.
     private var lastState = LinkService.CALL_IDLE
+    /** Snapshot after reconnect is not a new SIM call. */
+    private val recovery = SimCallRecoveryGuard()
     private var ringingNumber = ""
     private var ringingName = ""
     private var ringingSim: SimCallIdentity? = null
@@ -244,6 +246,23 @@ object CallHistory {
         if (lastState == LinkService.CALL_RINGING) declinedHere = true
     }
 
+    /** An interrupted call lacks complete timing and cannot be finalized. */
+    @Synchronized
+    fun onLinkLost() {
+        recovery.onDisconnect()
+        lastState = LinkService.CALL_IDLE
+        connectedSince = 0L
+        startedAt = 0L
+        ringingNumber = ""
+        ringingName = ""
+        ringingSim = null
+        answered = false
+        declinedHere = false
+        lastDialAt = 0L
+        lastDialNumber = ""
+        lastDialName = ""
+    }
+
     /**
      * Remote: the Gateway reported its SIM call state. Repeats of the same state are ignored.
      * Returns the call that just ended, if any.
@@ -253,6 +272,7 @@ object CallHistory {
         state: String, number: String, name: String,
         sim: SimCallIdentity? = null,
     ): Record? {
+        if (!recovery.shouldTrack(state)) return null
         val verifiedNumber = CallerId.asNumber(number)
         val verifiedName = CallerId.asName(name).ifEmpty {
             if (verifiedNumber.isEmpty() && CallerId.isPrivate(name)) CallerId.PRIVATE
