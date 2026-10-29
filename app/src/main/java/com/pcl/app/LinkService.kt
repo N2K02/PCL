@@ -1297,6 +1297,7 @@ class LinkService : Service() {
             @Suppress("DEPRECATION")
             val num = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
             val previousState = callState
+            val previousSimIdentity = callSimIdentity
             val newState = when (st) {
                 TelephonyManager.EXTRA_STATE_RINGING -> CALL_RINGING
                 TelephonyManager.EXTRA_STATE_OFFHOOK -> CALL_OFFHOOK
@@ -1319,7 +1320,13 @@ class LinkService : Service() {
                 simCallStartedMs = 0L
                 callDirection = ""
             }
+            if (newState != CALL_IDLE && callSimIdentity == null) {
+                // The subscription state can arrive slightly after the
+                // aggregate phone broadcast, so retry on subsequent events.
+                callSimIdentity = SimCallDetector.identify(this@LinkService, newState)
+            }
             val gotNumber = !num.isNullOrEmpty() && num != callNumber
+            val simChanged = callSimIdentity != previousSimIdentity
             val verifiedNumber = CallerId.asNumber(num)
             if (verifiedNumber.isNotEmpty()) {
                 callNumber = verifiedNumber
@@ -1328,7 +1335,7 @@ class LinkService : Service() {
             val changed = newState != callState
             if (changed && newState == CALL_RINGING) callControlError = null
             callState = newState
-            if (changed || gotNumber) {
+            if (changed || gotNumber || simChanged) {
                 Hub.log("Phone call: $newState (${logCaller()})")
                 sendCallState()
             }
