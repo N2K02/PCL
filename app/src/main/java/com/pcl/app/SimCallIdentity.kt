@@ -44,8 +44,11 @@ internal object SimCallSelection {
     )
 
     fun choose(candidates: List<Candidate>, expectedState: Int, perSimSupported: Boolean): SimCallIdentity? {
-        val valid = candidates.filter { it.slot >= 0 }.distinctBy { it.slot }
-        if (valid.size != candidates.count { it.slot >= 0 }) return null
+        // A subscription with no trustworthy slot may be the active line.
+        // Never silently discard it and label another SIM by elimination.
+        if (candidates.any { it.slot !in 0..3 }) return null
+        val valid = candidates.distinctBy { it.slot }
+        if (valid.size != candidates.size) return null
         val matched = if (perSimSupported) {
             val busy = valid.filter { it.callState != null &&
                 it.callState != TelephonyManager.CALL_STATE_IDLE }
