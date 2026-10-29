@@ -257,6 +257,14 @@ object CallHistory {
         lastDialAt = System.currentTimeMillis()
     }
 
+    /** Cancel an outgoing intention when the Gateway rejects the dial. */
+    @Synchronized
+    fun onDialFailed() {
+        lastDialNumber = ""
+        lastDialName = ""
+        lastDialAt = 0L
+    }
+
     /** The Remote declined a ringing call, so its end is "declined", not "missed". */
     @Synchronized
     fun onDeclinedHere() {

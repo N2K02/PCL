@@ -400,7 +400,10 @@ class LinkService : Service() {
         }
     }
 
-    private var callControlRequest = 0
+    @Volatile private var callControlRequest = 0
+    @Volatile private var pendingCallCommand: String? = null
+    @Volatile private var pendingAnswer = false
+    @Volatile private var pendingReject = false
 
     @Volatile private var running = false
     @Volatile private var generation = 0
@@ -529,19 +532,24 @@ class LinkService : Service() {
     // ---------------------------------------------------------------- public actions (UI)
 
     fun answer() {
-        stopSimRinging()
         if (role == ROLE_GATEWAY) {
             gatewayAnswer()
         } else {
-            simCallHere = true
+            // Keep ringing until the Gateway confirms OFFHOOK; a failed answer
+            // must not silently dismiss the incoming call.
+            pendingAnswer = true
             requestGateway("ANSWER")
         }
     }
 
     fun reject() {
-        stopSimRinging()
-        if (role == ROLE_REMOTE) CallHistory.onDeclinedHere()
-        if (role == ROLE_GATEWAY) gatewayEnd(rejectRinging = true) else requestGateway("REJECT")
+        if (role == ROLE_GATEWAY) {
+            gatewayEnd(rejectRinging = true)
+        } else {
+            // Mark Declined only once the Gateway confirms the rejection.
+            pendingReject = true
+            requestGateway("REJECT")
+        }
     }
 
     fun hangUp() {
@@ -553,9 +561,11 @@ class LinkService : Service() {
         if (role == ROLE_GATEWAY) {
             gatewayDial(number)
         } else {
-            CallHistory.onDialRequested(number, name)
-            simDialAt = SystemClock.elapsedRealtime()
             requestGateway("DIAL", number)
+            if (callControlError?.startsWith("PENDING:") == true) {
+                CallHistory.onDialRequested(number, name)
+                simDialAt = SystemClock.elapsedRealtime()
+            }
         }
     }
 
@@ -575,9 +585,11 @@ class LinkService : Service() {
             callControlError = "FAILED: Selected SIM does not have a verified voice account"
             Hub.notifyUi()
         } else {
-            CallHistory.onDialRequested(number, name)
-            simDialAt = SystemClock.elapsedRealtime()
             requestGateway("DIAL_SIM", number, slot)
+            if (callControlError?.startsWith("PENDING:") == true) {
+                CallHistory.onDialRequested(number, name)
+                simDialAt = SystemClock.elapsedRealtime()
+            }
         }
     }
 
@@ -594,29 +606,60 @@ class LinkService : Service() {
     }
 
     private fun requestGateway(command: String, argument: String = "", selectedSlot: Int? = null) {
-        if (!connected) {
-            callControlError = "FAILED: Bluetooth is disconnected"
-            Hub.log("Call control failed: Bluetooth is disconnected")
+        if (!connected || !helloReceived || peerProtocol != Protocol.VERSION) {
+            callControlError = "FAILED: Connect two phones running the same PCL version"
+            pendingAnswer = false
+            pendingReject = false
             Hub.notifyUi()
             return
         }
-        callControlError = "PENDING: Waiting for Gateway confirmation"
-        when (command) {
-            "DIAL" -> send(command, argument)
-            "DIAL_SIM" -> if (selectedSlot != null) send(command, argument, selectedSlot.toString())
-            else return
-            else -> send(command)
+        if (command == "DIAL_SIM" && selectedSlot == null) {
+            callControlError = "FAILED: No SIM selected"
+            Hub.notifyUi()
+            return
         }
         val request = ++callControlRequest
+        pendingCallCommand = command
+        callControlError = "PENDING: Waiting for Gateway confirmation"
+        when (command) {
+            "DIAL" -> send(command, argument, request.toString())
+            "DIAL_SIM" -> send(command, argument, selectedSlot.toString(), request.toString())
+            else -> send(command, request.toString())
+        }
         trafficHandler.postDelayed({
-            // No answer at all: say so instead of waiting forever.
             if (request == callControlRequest && callControlError?.startsWith("PENDING:") == true) {
-                callControlError = "FAILED: No reply from the Gateway. Check that both phones run the same PCL version."
-                Hub.log("Call control: no reply from the Gateway")
+                callControlError = "FAILED: Gateway did not confirm the call state"
+                clearPendingCall()
+                Hub.log("Call control timed out: $command")
                 Hub.notifyUi()
             }
         }, CALL_CONTROL_TIMEOUT_MS)
         Hub.notifyUi()
+    }
+
+    private fun clearPendingCall() {
+        if (pendingCallCommand in setOf("DIAL", "DIAL_SIM")) {
+            CallHistory.onDialFailed()
+            simDialAt = 0L
+        }
+        pendingCallCommand = null
+        pendingAnswer = false
+        pendingReject = false
+    }
+
+    /** A protocol acknowledgement is not proof that the telephone changed state. */
+    private fun confirmCallState() {
+        val confirmed = when (pendingCallCommand) {
+            "ANSWER", "DIAL", "DIAL_SIM" -> callState == CALL_OFFHOOK
+            "REJECT", "HANGUP" -> callState == CALL_IDLE
+            else -> false
+        }
+        if (confirmed) {
+            pendingCallCommand = null
+            pendingAnswer = false
+            pendingReject = false
+            callControlError = null
+        }
     }
 
     // ---------------------------------------------------------------- connection
@@ -741,6 +784,7 @@ class LinkService : Service() {
         helloReceived = false
         peerProtocol = null
         peerAppVersion = ""
+        clearPendingCall()
         // The Gateway's first CALL after a fresh Remote session is a snapshot,
         // not evidence of a newly started ringing or outgoing call. This also
         // protects process recreation where no disconnect callback ran.
@@ -773,6 +817,7 @@ class LinkService : Service() {
             helloReceived = false
             if (role == ROLE_REMOTE) {
                 if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
+                clearPendingCall()
                 stopRinging()
                 CallHistory.onLinkLost()
                 callState = CALL_IDLE
@@ -810,6 +855,7 @@ class LinkService : Service() {
         worker = null
         writer = null
         connected = false
+        clearPendingCall()
         clearPendingAudioRequests()
         stopRinging()
         if (receiverRegistered) {
@@ -840,12 +886,15 @@ class LinkService : Service() {
         }
         try {
             io.execute {
+                // Never write commands to a replaced session's old socket.
+                if (writer !== w || !connected && !msg.startsWith("HELLO|")) return@execute
                 try {
                     w.writeCmd(msg)
                     txTotal.addAndGet(msg.toByteArray(Charsets.UTF_8).size.toLong() + 5L)
                 } catch (e: Exception) {
-                    Hub.log("Send failed: ${e.message}")
-                    closeSocket()
+                    Hub.log("Send failed: ${e.javaClass.simpleName}")
+                    // An old writer must not close the new Bluetooth session.
+                    if (writer === w) closeSocket()
                 }
             }
         } catch (e: Exception) {
@@ -862,22 +911,34 @@ class LinkService : Service() {
             Hub.log("Ignored $cmd: the ${if (role == ROLE_GATEWAY) "Gateway" else "Remote"} doesn't handle it")
             return
         }
+        if (cmd != "HELLO" && (!helloReceived || peerProtocol != Protocol.VERSION)) {
+            Hub.log("Ignored $cmd: peer protocol handshake is incomplete or incompatible")
+            return
+        }
         when (cmd) {
             "HELLO" -> {
-                // Older versions sent only the role; they have no protocol number.
                 peerProtocol = p.getOrNull(2)?.toIntOrNull()
                 peerAppVersion = p.getOrNull(3).orEmpty().take(20)
-                helloReceived = true
+                val expectedRole = if (role == ROLE_GATEWAY) ROLE_REMOTE else ROLE_GATEWAY
+                helloReceived = arg1 == expectedRole
                 Hub.log("Peer is the $arg1 phone (PCL ${peerAppVersion.ifEmpty { "older version" }})")
                 versionWarning?.let { Hub.log("Version mismatch: $it") }
-                if (role == ROLE_GATEWAY && peerProtocol != null &&
-                    peerProtocol!! >= 9 && arg1 == ROLE_REMOTE) sendPendingSimEnrichment()
+                if (!helloReceived) {
+                    Hub.log("Unexpected Bluetooth peer role; closing connection")
+                    closeSocket()
+                    return
+                }
+                if (peerProtocol != Protocol.VERSION) {
+                    Hub.log("Incompatible protocol; call commands disabled until both phones update")
+                    return
+                }
+                if (role == ROLE_GATEWAY) sendPendingSimEnrichment()
             }
             // gateway -> remote
             "CALL" -> {
                 val previousState = callState
                 callState = arg1.takeIf { it in setOf(CALL_IDLE, CALL_RINGING, CALL_OFFHOOK) } ?: CALL_IDLE
-                if (callState == CALL_RINGING) callControlError = null
+                if (callState == CALL_RINGING && pendingCallCommand == null) callControlError = null
                 callNumber = CallerId.asNumber(p.getOrElse(2) { "" })
                 val receivedName = p.getOrElse(3) { "" }.trim()
                 // Generic dialer placeholders are not contact names. When the
@@ -899,10 +960,15 @@ class LinkService : Service() {
                 availableSimSlots = p.getOrNull(8).orEmpty().split(",")
                     .mapNotNull { it.toIntOrNull()?.takeIf { index -> index in 0..1 } }
                     .toSet()
+                if (callState == CALL_IDLE && previousState == CALL_RINGING && pendingReject &&
+                    callControlError?.startsWith("FAILED:") != true) {
+                    CallHistory.onDeclinedHere()
+                }
                 CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
                     p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L })
 
                 onRemoteCallUpdate(previousState)
+                confirmCallState()
             }
             "CALL_LOGGED" -> {
                 val started = arg1.toLongOrNull() ?: return
@@ -928,14 +994,19 @@ class LinkService : Service() {
                 if (role == ROLE_GATEWAY) PendingSimEnrichment.acknowledge(this, arg1)
             }
             // remote -> gateway
-            "ANSWER" -> { gatewayAnswer(); sendCallResult() }
-            "REJECT", "HANGUP" -> { gatewayEnd(rejectRinging = cmd == "REJECT"); sendCallResult() }
-            "DIAL" -> { gatewayDial(arg1); sendCallResult() }
+            "ANSWER" -> { callControlError = null; gatewayAnswer(); sendCallResult(p.getOrNull(1).orEmpty()) }
+            "REJECT", "HANGUP" -> {
+                callControlError = null
+                gatewayEnd(rejectRinging = cmd == "REJECT")
+                sendCallResult(p.getOrNull(1).orEmpty())
+            }
+            "DIAL" -> { callControlError = null; gatewayDial(arg1); sendCallResult(p.getOrNull(2).orEmpty()) }
             "DIAL_SIM" -> {
+                callControlError = null
                 val slot = p.getOrNull(2)?.toIntOrNull()?.takeIf { it in 0..1 }
                 if (slot == null) callControlError = "FAILED: Invalid SIM slot"
                 else gatewayDial(arg1, slot)
-                sendCallResult()
+                sendCallResult(p.getOrNull(3).orEmpty())
             }
             "SYNC_CONTACTS" -> sendContacts()
             "AUDIO_QUERY" -> gatewayAudioStatus()
@@ -964,9 +1035,22 @@ class LinkService : Service() {
                 gatewayVolumeMode = p.getOrNull(4).orEmpty().takeIf { it in volumeModes } ?: "AUTO"
             }
             "CALL_RESULT" -> {
-                val detail = p.drop(2).joinToString("|")
-                callControlError = if (arg1 == "FAILED") "FAILED: $detail" else null
-                Hub.log(if (arg1 == "FAILED") "Gateway call control failed: $detail" else "Gateway accepted call-control request")
+                val request = p.getOrNull(2)?.toIntOrNull()
+                if (request != callControlRequest || pendingCallCommand == null) {
+                    Hub.log("Ignored stale or uncorrelated call-control acknowledgement")
+                    return
+                }
+                val detail = p.drop(3).joinToString("|")
+                if (arg1 == "FAILED") {
+                    callControlError = "FAILED: $detail"
+                    clearPendingCall()
+                    Hub.log("Gateway call control failed: $detail")
+                } else {
+                    if (pendingReject && callState == CALL_RINGING) CallHistory.onDeclinedHere()
+                    Hub.log("Gateway accepted call-control request #$request; awaiting call state")
+                    callControlError = "PENDING: Waiting for confirmed phone state"
+                    confirmCallState()
+                }
             }
             // contacts: gateway -> remote
             "CONTACTS_HASH" -> {
@@ -1016,9 +1100,10 @@ class LinkService : Service() {
         Hub.notifyUi()
     }
 
-    private fun sendCallResult() {
+    private fun sendCallResult(requestId: String) {
         val error = callControlError
-        send("CALL_RESULT", if (error == null) "OK" else "FAILED", error?.removePrefix("FAILED: ") ?: "Android accepted the request")
+        send("CALL_RESULT", if (error == null) "OK" else "FAILED", requestId,
+            error?.removePrefix("FAILED: ") ?: "Android accepted the request")
     }
 
     private fun setConn(isConnected: Boolean, text: String) {
@@ -1424,10 +1509,10 @@ class LinkService : Service() {
             }
             CALL_OFFHOOK -> {
                 stopSimRinging()
+                if (pendingAnswer) simCallHere = true
                 if (previous == CALL_IDLE) {
-                    // Placed from here if this phone asked to dial just now (or answered it
-                    // before a link drop).
-                    simCallHere = simCallHere || SystemClock.elapsedRealtime() - simDialAt < DIAL_WINDOW_MS
+                    simCallHere = simCallHere || (simDialAt > 0L &&
+                        SystemClock.elapsedRealtime() - simDialAt < DIAL_WINDOW_MS)
                 }
                 if (simCallHere) {
                     simCallOnGateway = false

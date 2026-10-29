@@ -43,7 +43,7 @@ class SimRuntimeIntegrationTest {
         assertTrue(link.contains("fun dialWithSim("))
         assertTrue(screen.contains("actions.simCallFromSlot("))
         assertTrue(screen.contains("RecentCallActionsPolicy.availability("))
-        assertTrue(source("Protocol").contains("const val VERSION = 9"))
+        assertTrue(source("Protocol").contains("const val VERSION = 10"))
     }
 
     @Test fun simHistoryDoesNotAmendArbitraryNewestRow() {

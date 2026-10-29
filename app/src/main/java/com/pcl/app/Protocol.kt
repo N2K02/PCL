@@ -27,8 +27,9 @@ object Protocol {
      *  - 7: SIM-only command surface; third-party calls and notification mirroring removed
      *  - 8: remote-selectable Gateway volume modes and synchronized mode status
      *  - 9: verified SIM dialing and acknowledged optional CallLog enrichment
+     *  - 10: call-control request IDs and confirmed connection compatibility
      */
-    const val VERSION = 9
+    const val VERSION = 10
 }
 
 /**
