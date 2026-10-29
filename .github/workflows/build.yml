@@ -104,8 +104,8 @@ jobs:
           yes | "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           chmod +x gradlew
           set -o pipefail
-          ./gradlew --no-daemon assembleDebug -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
-          cp app/build/outputs/apk/debug/app-debug.apk "$APP-$VERSION.apk"
+          ./gradlew --no-daemon assembleRelease -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
+          cp app/build/outputs/apk/release/app-release.apk "$APP-$VERSION.apk"
 
       - name: Publish APK release
         if: github.event_name != 'pull_request'
