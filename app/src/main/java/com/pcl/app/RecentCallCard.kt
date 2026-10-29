@@ -170,7 +170,7 @@ internal fun RecentCallCard(
                     fontWeight = FontWeight.SemiBold,
                     modifier = Modifier.padding(horizontal = 22.dp, vertical = 10.dp),
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
-                SheetAction("Make a quick call", Icons.Default.Call, flags.quickCall) {
+                SheetAction("Make a SIM call", Icons.Default.Call, flags.quickCall) {
                     menuVisible = false
                     actions.simCall(number, contactName)
                 }
