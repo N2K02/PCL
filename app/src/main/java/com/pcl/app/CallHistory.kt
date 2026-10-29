@@ -174,6 +174,56 @@ object CallHistory {
         setUnseen(0)
     }
 
+    /** Update only the unique recently-ended SIM call. Never touch VoIP or
+     *  assume an arbitrary row in Recents is the matching telephone call.
+     */
+    @Synchronized
+    fun amendSim(
+        originalStartMs: Long,
+        number: String?,
+        name: String?,
+        restricted: Boolean,
+        sim: SimCallIdentity?,
+    ): Record? {
+        if (!loaded || originalStartMs <= 0L) return null
+        val records = _records.value
+        val matches = records.indices.filter { index ->
+            val r = records[index]
+            SimRecentsAnalytics.isSim(r) &&
+                kotlin.math.abs(r.at - originalStartMs) <= 45_000L &&
+                r.type != Type.WHATSAPP
+        }
+        if (matches.size != 1) return null
+        val index = matches.single()
+        val old = records[index]
+        val incomingNumber = CallerId.asNumber(number)
+        val originalNumber = CallerId.asNumber(old.number)
+        if (originalNumber.isNotEmpty() && incomingNumber.isNotEmpty() &&
+            !CallerId.sameNumber(originalNumber, incomingNumber)) return null
+        if (old.simSlot != null && sim != null &&
+            old.simSlot != sim.slotIndex) return null
+        val safeNumber = originalNumber.ifEmpty { incomingNumber }
+        val originalName = CallerId.asName(old.name)
+        val recoveredName = CallerId.asName(name)
+        val privateName = safeNumber.isEmpty() && (restricted ||
+            CallerId.isPrivate(old.name) || CallerId.isPrivate(name))
+        val safeName = originalName.ifEmpty { recoveredName }.ifEmpty {
+            if (privateName) CallerId.PRIVATE else ""
+        }
+        val updated = normalize(old.copy(
+            number = safeNumber,
+            name = safeName,
+            simSlot = old.simSlot ?: sim?.slotIndex,
+            simLabel = old.simLabel ?: sim?.displayName,
+            carrier = old.carrier ?: sim?.carrier,
+        ))
+        if (updated == old) return null
+        val changed = records.toMutableList().also { it[index] = updated }
+        _records.value = changed
+        save(changed)
+        return updated
+    }
+
     /** The Remote asked the Gateway to dial: remembered because Android may not report the number. */
     @Synchronized
     fun onDialRequested(number: String, name: String) {
