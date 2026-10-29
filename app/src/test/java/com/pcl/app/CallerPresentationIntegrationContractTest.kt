@@ -82,6 +82,12 @@ class CallerPresentationIntegrationContractTest {
         assertTrue(ui.contains("val canCall = ui.connected && number.isNotEmpty()"))
         assertTrue(ui.contains("enabled = canCall"))
         assertTrue(ui.contains("enabled = number.isNotEmpty()"))
-        assertTrue(ui.contains("number = number,"))
+        val card = source("RecentCallCard")
+        val policy = source("RecentCallActionsPolicy")
+        assertTrue(card.contains("val number = CallerId.asNumber(record.number)"))
+        assertTrue(card.contains("flags.quickCall"))
+        assertTrue(card.contains("flags.simOne"))
+        assertTrue(card.contains("flags.simTwo"))
+        assertTrue(policy.contains("quickCall = dial"))
     }
 }
