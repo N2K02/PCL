@@ -24,6 +24,7 @@
         android:icon="@drawable/ic_pcl"
         android:label="PCL"
         android:theme="@style/Theme.PCL">
+        <activity android:name="com.pcl.app.LogsActivity" android:exported="false" android:label="Logs" />
         <provider android:name="com.pcl.app.CrashJournalProvider" android:authorities="${applicationId}.crashjournal" android:exported="false" android:initOrder="100" />
 
         <activity
