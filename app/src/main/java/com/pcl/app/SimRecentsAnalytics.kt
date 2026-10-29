@@ -20,7 +20,7 @@ internal object SimRecentsAnalytics {
             record.type != CallHistory.Type.WHATSAPP
 
     fun matches(record: CallHistory.Record, filter: Filter): Boolean = when (filter) {
-        Filter.ALL -> true
+        Filter.ALL -> isSim(record)
         Filter.SIM_1 -> isSim(record) && record.simSlot == 0
         Filter.SIM_2 -> isSim(record) && record.simSlot == 1
         Filter.UNIDENTIFIED -> isSim(record) && record.simSlot !in setOf(0, 1)
