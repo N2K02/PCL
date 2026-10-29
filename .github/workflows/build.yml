@@ -105,7 +105,21 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [ -n "$SIGNING_KEYSTORE_ENC_BASE64" ]; then
+          if [ -s signing/keys.tar.enc ]; then
+            : "${SIGNING_PASSPHRASE:?SIGNING_PASSPHRASE is required to decrypt signing/keys.tar.enc}"
+            umask 077
+            mkdir -p "$RUNNER_TEMP/signing"
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+              -pass env:SIGNING_PASSPHRASE -in signing/keys.tar.enc |
+              tar -xf - -C "$RUNNER_TEMP/signing"
+            test -s "$RUNNER_TEMP/signing/old.keystore"
+            if [ -f app/debug.keystore ]; then
+              cmp -s app/debug.keystore "$RUNNER_TEMP/signing/old.keystore" ||
+                { echo "::error::Signing bundle differs from current certificate"; exit 1; }
+            fi
+            cp "$RUNNER_TEMP/signing/old.keystore" app/debug.keystore
+            echo "Using the verified encrypted signing bundle"
+          elif [ -n "$SIGNING_KEYSTORE_ENC_BASE64" ]; then
             if [ -z "$SIGNING_PASSPHRASE" ]; then
               echo "::error::SIGNING_PASSPHRASE must be provided when encrypted keystore is configured"
               exit 1
