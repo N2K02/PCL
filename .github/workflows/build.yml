@@ -45,6 +45,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Test public version resolution
+        run: bash .github/scripts/test-public-version.sh
+
       - name: Work out version and release notes
         env:
           REQUESTED: ${{ github.event.inputs.version }}
@@ -53,7 +56,8 @@ jobs:
           # Latest release tag of the form vMAJOR.MINOR (v1.9, v2.0, ...).
           # Preserve the highest installed release lineage from source or public distribution.
           local_last=$(git tag -l 'v[0-9]*' | grep -E '^v[0-9]+[.][0-9]$' | sort -V | tail -1 || true)
-          public_last=$(gh api 'repos/N2K02/n2k02.github.io/releases?per_page=100' --jq '.[].tag_name' 2>/dev/null | sed -nE 's/^pcl-v([0-9]+[.][0-9])(-build-[0-9]+)?$/v\1/p' | sort -V | tail -1 || true)
+          # Read the full public version tag history, not the first 100 shared releases.
+          public_last=$(bash .github/scripts/latest-public-version.sh pcl)
           last=$(printf '%s\n%s\n' "$local_last" "$public_last" | sort -V | tail -1)
           if [ -n "$REQUESTED" ]; then
             echo "$REQUESTED" | grep -Eq '^[0-9]+\.[0-9]$' || { echo "::error::Version must look like 1.0"; exit 1; }
@@ -68,6 +72,12 @@ jobs:
           if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
             echo "::error::Release v$ver already exists; choose the next version."
             exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ -n "$last" ]; then
+            max=$(printf '%s\n%s\n' "$last" "v$ver" | sort -V | tail -1)
+            if [ "$max" != "v$ver" ] || [ "$last" = "v$ver" ]; then
+              echo "::error::Release v$ver must advance past $last"; exit 1
+            fi
           fi
           echo "VERSION=$ver" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$(( 100000 + GITHUB_RUN_NUMBER ))" >> "$GITHUB_ENV"
