@@ -21,7 +21,7 @@ class RecentCallPresentationTest {
     }
 
     @Test fun everyCallOutcomeGetsItsOwnLabelWithoutUnknownPlaceholder() {
-        val names = listOf("Incoming", "Outgoing", "Missed", "Declined", "Call")
+        val names = listOf("Incoming", "Outgoing", "Missed", "Declined")
         assertEquals(names, CallHistory.Type.entries.map(RecentCallPresentation::outcome))
     }
 
