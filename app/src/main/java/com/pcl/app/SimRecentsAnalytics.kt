@@ -3,7 +3,7 @@ package com.pcl.app
 /** Presentation-only filters and all-time statistics. VoIP is never counted as SIM. */
 internal object SimRecentsAnalytics {
     enum class Filter(val title: String) {
-        ALL("All"), SIM_1("SIM 1"), SIM_2("SIM 2"), UNIDENTIFIED("Other SIM")
+        ALL("All SIM"), SIM_1("SIM 1"), SIM_2("SIM 2"), UNIDENTIFIED("Other SIM")
     }
 
     data class Stats(
