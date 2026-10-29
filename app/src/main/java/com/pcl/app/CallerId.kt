@@ -61,9 +61,16 @@ object CallerId {
     fun isPrivate(label: String?): Boolean = clean(label).lowercase(Locale.ROOT) in PRIVATE_LABELS
 
     /** True when the label is a generic placeholder or a withheld-number label, not a name. */
+    private val GENERIC_CALL = Regex(
+        "^(?:(?:incoming|outgoing|ongoing|missed|active|connecting) )?" +
+            "(?:(?:whatsapp(?: business)?|telegram|signal|messenger|viber) )?" +
+            "(?:(?:voice|video) )?call(?: in progress)?$"
+    )
+
     fun isPlaceholder(label: String?): Boolean {
         val c = clean(label).lowercase(Locale.ROOT)
-        return c.isEmpty() || c in PLACEHOLDER_LABELS || c in PRIVATE_LABELS
+        return c.isEmpty() || c in PLACEHOLDER_LABELS || c in PRIVATE_LABELS ||
+            GENERIC_CALL.matches(c)
     }
 
     /** The label as a contact name, or "" when it is empty, a placeholder or a number. */
