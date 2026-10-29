@@ -696,39 +696,12 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                 }
             }
             item(key = "call-$index-${r.at}") {
-                val number = CallerId.asNumber(r.number)
-                val name = CallerId.asName(r.name).ifEmpty {
-                    CallerId.asName(names.exact(number)?.name)
-                }
-                val source = r.sourceApp ?: if (r.whatsapp) "WhatsApp" else "SIM"
-                PersonRow(
-                    title = CallerId.display(name.ifBlank { r.name }, number,
-                        CallerId.callSummary(r.type.name, source)),
-                    titleColor = if (r.type == CallHistory.Type.MISSED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    subtitle = buildString {
-                        if (r.whatsapp) append("WhatsApp · ")
-                        else if (!r.sourceApp.isNullOrBlank()) append(r.sourceApp).append(" · ")
-                        else r.simIdentity?.let { append(it.description()).append(" · ") }
-                        append(typeLabel(r.type))
-                        append(" · ")
-                        append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
-                        if (r.durationSec > 0) append(" · ").append(duration(r.durationSec))
-                    },
-                    leading = {
-                        Icon(
-                            typeIcon(r.type), contentDescription = typeLabel(r.type),
-                            tint = if (r.type == CallHistory.Type.MISSED || r.type == CallHistory.Type.DECLINED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    },
-                    number = number,
-                    name = name,
-                    badges = { RecentCallBadges(r) },
-                    expanded = expanded == index,
-                    onToggle = { expanded = if (expanded == index) null else index },
+                RecentCallCard(
+                    record = r,
+                    lookedUpName = names.exact(CallerId.asNumber(r.number))?.name,
                     ui = ui,
                     actions = actions,
-                    onEdit = onEdit,
+                    onDelete = { CallHistory.remove(it) },
                 )
             }
         }
@@ -852,7 +825,7 @@ private fun ContactRow(
 /** A person or call: tap to show Call / WhatsApp / Favourite / Edit; the phone icon calls at once. */
 /** Two quiet, modern badges: originating SIM/app and observed call direction. */
 @Composable
-private fun RecentCallBadges(call: CallHistory.Record) {
+internal fun RecentCallBadges(call: CallHistory.Record) {
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val incoming = if (dark) Color(0xFF90DFAE) else Color(0xFF247348)
     val outgoing = if (dark) Color(0xFF9ECFFF) else Color(0xFF215D9B)
