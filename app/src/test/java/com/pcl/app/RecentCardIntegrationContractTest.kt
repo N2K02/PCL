@@ -36,7 +36,7 @@ class RecentCardIntegrationContractTest {
         assertTrue(card.contains("flags.simOne"))
         assertTrue(card.contains("flags.simTwo"))
         assertTrue(card.contains("flags.contact"))
-        assertTrue(card.contains("CallHistory.remove(it)"))
+        assertTrue(calls.contains("onDelete = { CallHistory.remove(it) }"))
     }
 
     @Test fun privateNumberAndNoNumberNeverEnableSensitiveActions() {
