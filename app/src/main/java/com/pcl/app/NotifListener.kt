@@ -248,25 +248,17 @@ class NotifListener : NotificationListenerService() {
                 // Dialers may put the raw number in the Person name, compat Person,
                 // title or text instead of the Person URI. Do not treat a number as
                 // a contact name, and never forward generic dialer placeholders.
-                val numberPattern = Regex("^\\+?[0-9][0-9() .-]{3,28}[0-9]$")
-                fun phoneNumber(value: String): String =
-                    value.trim().takeIf { numberPattern.matches(it) &&
-                        it.count(Char::isDigit) >= 5 }.orEmpty()
-                val candidate = listOf(uriNumber, person?.name?.toString().orEmpty(),
-                    compatCallerName(ex), title, text)
-                    .firstNotNullOfOrNull { phoneNumber(it).takeIf(String::isNotEmpty) }.orEmpty()
                 val personName = person?.name?.toString().orEmpty()
+                val allLabels = listOf(uriNumber, personName, compatCallerName(ex), title, text)
+                val candidate = allLabels.firstNotNullOfOrNull {
+                    CallerId.asNumber(it).takeIf(String::isNotEmpty)
+                }.orEmpty()
                 val candidateName = listOf(personName, compatCallerName(ex), title)
-                    .map(String::trim)
-                    .firstOrNull { it.isNotEmpty() && phoneNumber(it).isEmpty() &&
-                        it !in listOf("Incoming call", "Ongoing call", "Phone",
-                            "Unknown", "Unknown number", "Private number", "No caller ID") }
+                    .firstNotNullOfOrNull { CallerId.asName(it).takeIf(String::isNotEmpty) }
                     .orEmpty()
-                val privateLabel = listOf(personName, compatCallerName(ex), title, text)
-                    .any { it.trim().lowercase() in setOf("private number", "private caller",
-                        "no caller id", "withheld", "restricted", "anonymous") }
+                val withheld = candidate.isEmpty() && allLabels.any(CallerId::isPrivate)
                 svc.updateCallerFromNotification(candidate,
-                    candidateName.ifEmpty { if (privateLabel) "Private number" else "" })
+                    candidateName.ifEmpty { if (withheld) CallerId.PRIVATE else "" })
                 return
             }
             val previousSessionState = synchronized(thirdPartySessions) {
