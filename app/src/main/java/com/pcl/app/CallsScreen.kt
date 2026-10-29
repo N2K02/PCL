@@ -634,12 +634,18 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                 }
             }
             item(key = "call-$index-${r.at}") {
-                val name = r.name.ifEmpty { names.exact(r.number)?.name.orEmpty() }
+                val number = CallerId.asNumber(r.number)
+                val name = CallerId.asName(r.name).ifEmpty {
+                    CallerId.asName(names.exact(number)?.name)
+                }
+                val source = r.sourceApp ?: if (r.whatsapp) "WhatsApp" else "SIM"
                 PersonRow(
-                    title = name.ifEmpty { r.number.ifEmpty { "Unknown number" } },
+                    title = CallerId.display(name.ifBlank { r.name }, number,
+                        CallerId.callSummary(r.type.name, source)),
                     titleColor = if (r.type == CallHistory.Type.MISSED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
                     subtitle = buildString {
                         if (r.whatsapp) append("WhatsApp · ")
+                        else if (!r.sourceApp.isNullOrBlank()) append(r.sourceApp).append(" · ")
                         append(typeLabel(r.type))
                         append(" · ")
                         append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
@@ -652,7 +658,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                             modifier = Modifier.size(24.dp),
                         )
                     },
-                    number = r.number,
+                    number = number,
                     name = name,
                     expanded = expanded == index,
                     onToggle = { expanded = if (expanded == index) null else index },
