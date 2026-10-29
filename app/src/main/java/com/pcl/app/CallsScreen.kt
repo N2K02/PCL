@@ -7,6 +7,7 @@ import android.media.ToneGenerator
 import android.os.SystemClock
 import android.telephony.PhoneNumberUtils
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -27,6 +28,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.CallMade
@@ -44,6 +46,8 @@ import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.PhoneDisabled
 import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.SimCard
+import androidx.compose.material.icons.filled.Apps
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Sync
@@ -82,6 +86,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -646,6 +651,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                     subtitle = buildString {
                         if (r.whatsapp) append("WhatsApp · ")
                         else if (!r.sourceApp.isNullOrBlank()) append(r.sourceApp).append(" · ")
+                        else r.simIdentity?.let { append(it.description()).append(" · ") }
                         append(typeLabel(r.type))
                         append(" · ")
                         append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
@@ -660,6 +666,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
                     },
                     number = number,
                     name = name,
+                    badges = { RecentCallBadges(r) },
                     expanded = expanded == index,
                     onToggle = { expanded = if (expanded == index) null else index },
                     ui = ui,
@@ -759,6 +766,71 @@ private fun ContactRow(
 // ---------------------------------------------------------------- shared rows
 
 /** A person or call: tap to show Call / WhatsApp / Favourite / Edit; the phone icon calls at once. */
+/** Two quiet, modern badges: originating SIM/app and observed call direction. */
+@Composable
+private fun RecentCallBadges(call: CallHistory.Record) {
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val incoming = if (dark) Color(0xFF90DFAE) else Color(0xFF247348)
+    val outgoing = if (dark) Color(0xFF9ECFFF) else Color(0xFF215D9B)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val app = call.sourceApp ?: if (call.whatsapp) "WhatsApp" else null
+    val source = if (app != null) app else call.simIdentity?.badge() ?: "SIM"
+    val sourceTint = if (app != null) {
+        if (app.contains("WhatsApp", ignoreCase = true)) incoming
+        else MaterialTheme.colorScheme.tertiary
+    } else outgoing
+    val directionTint = when (call.type) {
+        CallHistory.Type.INCOMING -> incoming
+        CallHistory.Type.OUTGOING -> outgoing
+        CallHistory.Type.MISSED, CallHistory.Type.DECLINED ->
+            MaterialTheme.colorScheme.error
+        else -> muted
+    }
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
+    ) {
+        RecentCallChip(
+            label = source,
+            icon = if (app != null) Icons.Default.Apps else Icons.Default.SimCard,
+            tint = sourceTint,
+        )
+        RecentCallChip(
+            label = when (call.type) {
+                CallHistory.Type.INCOMING -> "Incoming"
+                CallHistory.Type.OUTGOING -> "Outgoing"
+                CallHistory.Type.MISSED -> "Missed"
+                CallHistory.Type.DECLINED -> "Declined"
+                CallHistory.Type.WHATSAPP -> "Call"
+            },
+            icon = typeIcon(call.type),
+            tint = directionTint,
+        )
+    }
+}
+
+@Composable
+private fun RecentCallChip(label: String, icon: ImageVector, tint: Color) {
+    val border = BorderStroke(0.75.dp, tint.copy(alpha = 0.28f))
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = tint.copy(alpha = 0.12f),
+        border = border,
+    ) {
+        Row(
+            Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(14.dp))
+            Text(label, style = MaterialTheme.typography.labelSmall,
+                color = tint, fontWeight = FontWeight.SemiBold,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
+}
+
 @Composable
 private fun PersonRow(
     title: String,
@@ -772,6 +844,7 @@ private fun PersonRow(
     actions: CallsActions,
     onEdit: (String) -> Unit,
     titleColor: Color = MaterialTheme.colorScheme.onSurface,
+    badges: (@Composable () -> Unit)? = null,
 ) {
     val canCall = ui.connected && number.isNotEmpty() && ui.callState == LinkService.CALL_IDLE
     val favourite = Favourites.list.collectAsState().value.any { Favourites.key(it.number) == Favourites.key(number) }
@@ -794,6 +867,7 @@ private fun PersonRow(
                 if (subtitle.isNotEmpty()) {
                     Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
+                badges?.invoke()
             }
             IconButton(onClick = { actions.simCall(number, name) }, enabled = canCall) {
                 Icon(Icons.Default.Call, contentDescription = "Call $title through the Gateway SIM", tint = if (canCall) CallGreen else MaterialTheme.colorScheme.onSurfaceVariant)
