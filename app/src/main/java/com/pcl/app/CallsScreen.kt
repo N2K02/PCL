@@ -429,7 +429,8 @@ private fun KeypadPane(
                         Spacer(Modifier.size(key))
                         FilledTonalIconButton(
                             onClick = { actions.simCall(number, name) },
-                            enabled = ui.connected && number.isNotEmpty() && ui.callState == LinkService.CALL_IDLE,
+                            enabled = ui.connected && CallerId.asNumber(number).isNotEmpty() &&
+                                ui.callState == LinkService.CALL_IDLE,
                             colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = CallGreen, contentColor = Color.White),
                             modifier = Modifier.size(key),
                         ) { Icon(Icons.Default.Call, contentDescription = "Call through the Gateway SIM", Modifier.size(key * 0.4f)) }
@@ -749,7 +750,8 @@ private fun PersonRow(
     onEdit: (String) -> Unit,
     titleColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-    val canCall = ui.connected && number.isNotEmpty() && ui.callState == LinkService.CALL_IDLE
+    val canCall = ui.connected && CallerId.asNumber(number).isNotEmpty() &&
+        ui.callState == LinkService.CALL_IDLE
     val favourite = Favourites.list.collectAsState().value.any { Favourites.key(it.number) == Favourites.key(number) }
     Column(
         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large)

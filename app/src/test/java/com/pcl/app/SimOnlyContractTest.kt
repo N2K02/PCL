@@ -81,8 +81,10 @@ class SimOnlyContractTest {
         assertFalse(recents.contains("PersonRow("))
         assertFalse(recents.contains("onToggle"))
         assertTrue(recents.contains("RecentCallActionsPolicy.availability("))
-        assertTrue(recents.contains("actions.simCall(r.number, name)"))
-        assertTrue(recents.contains("enabled = flags.quickCall"))
+        assertTrue(recents.contains("actions.simCall(record.number, name)"))
+        assertTrue(recents.contains("if (flags.quickCall)"))
+        assertTrue(recents.contains("Favourites.toggle(Contact(name, record.number))"))
+        assertTrue(recents.contains("CallHistory.remove(selected)"))
     }
 
     @Test fun manifestAndSettingsRequireNoNotificationListenerOrAccessibility() {
