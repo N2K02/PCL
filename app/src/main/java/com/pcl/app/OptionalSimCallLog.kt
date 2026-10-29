@@ -47,15 +47,15 @@ internal object OptionalSimCallLog {
                 "${CallLog.Calls.DATE} DESC",
             )?.use { cursor ->
                 val list = mutableListOf<SimCallLogMatch.Entry>()
-                while (cursor.moveToNext() && list.size < 40) {
+                while (list.size < 41 && cursor.moveToNext()) {
                     list += SimCallLogMatch.Entry(
                         cursor.getLong(0), cursor.getInt(1),
                         cursor.getString(2), cursor.getString(3),
                         cursor.getInt(4), cursor.getString(5), cursor.getString(6),
                     )
                 }
-                // Incomplete query results must never be treated as unique.
-                if (cursor.moveToNext()) emptyList() else list
+                // If >40 rows fall in this window, don't treat partial data as unique.
+                if (list.size > 40) emptyList() else list
             }.orEmpty()
         }.getOrElse {
             Hub.log("Optional call history lookup unavailable; normal call detection unaffected")
