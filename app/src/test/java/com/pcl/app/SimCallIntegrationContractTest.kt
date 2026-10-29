@@ -36,7 +36,8 @@ class SimCallIntegrationContractTest {
     @Test fun remoteStoresSimSlotForMissedAnsweredAndOutgoingCalls() {
         val service = source("LinkService")
         val history = source("CallHistory")
-        assertTrue(service.contains("CallHistory.onSimState(callState, callNumber, callName, callSimIdentity)"))
+        assertTrue(service.contains("CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,"))
+        assertTrue(service.contains("p.getOrNull(9)?.toLongOrNull()"))
         assertTrue(history.contains("ringingSim = sim"))
         assertTrue(history.contains("val source = ringingSim ?: sim"))
         assertTrue(history.contains("simSlot = source?.slotIndex"))
