@@ -1858,8 +1858,11 @@ class LinkService : Service() {
         // The calls channel is silent: PCL plays the ringtone itself while it rings.
         val builder = Notification.Builder(this, CH_CALLS)
             .setSmallIcon(android.R.drawable.sym_action_call).setSubText("$app · on the Gateway")
-            .setContentTitle(title.ifEmpty { app }).setContentText(text)
-            .setStyle(Notification.BigTextStyle().bigText(text)).setCategory(Notification.CATEGORY_CALL)
+            .setContentTitle(safeTitle)
+            .setContentText(text.takeUnless { CallerId.isPlaceholder(it) }.orEmpty())
+            .setStyle(Notification.BigTextStyle().bigText(
+                text.takeUnless { CallerId.isPlaceholder(it) }.orEmpty()))
+            .setCategory(Notification.CATEGORY_CALL)
             .setWhen(connectedAt ?: now).setShowWhen(true).setUsesChronometer(connectedAt != null)
             .setOngoing(true)
             .setContentIntent(openCallsPi()).setDeleteIntent(deletePi)
