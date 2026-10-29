@@ -629,8 +629,9 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
         ?: SimRecentsAnalytics.Filter.ALL
     val shownRecords = SimRecentsAnalytics.filter(records, filter)
 
-    if (records.isEmpty()) {
-        EmptyState(Icons.Default.History, "No calls yet", "Calls you make or get through the Gateway show up here.")
+    if (SimRecentsAnalytics.filter(records, SimRecentsAnalytics.Filter.ALL).isEmpty()) {
+        EmptyState(Icons.Default.History, "No SIM calls yet",
+            "SIM calls you make or receive through the Gateway appear here.")
         return
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
