@@ -1173,7 +1173,10 @@ class LinkService : Service() {
             "REJECT", "HANGUP" -> { gatewayEnd(rejectRinging = cmd == "REJECT"); sendCallResult() }
             "DIAL" -> { gatewayDial(arg1); sendCallResult() }
             "DIAL_SIM" -> {
-                gatewayDial(arg1, p.getOrNull(2)?.toIntOrNull())
+                val slot = p.getOrNull(2)?.toIntOrNull()?.takeIf { it in 0..1 }
+                if (slot == null) {
+                    callControlError = "FAILED: Invalid or unavailable SIM slot"
+                } else gatewayDial(arg1, slot)
                 sendCallResult()
             }
             "SYNC_CONTACTS" -> sendContacts()
