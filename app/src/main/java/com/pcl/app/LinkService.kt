@@ -1747,10 +1747,20 @@ class LinkService : Service() {
                     callControlError = "FAILED: A SIM call is already active"
                     return
                 }
-                val account = SimDialAccounts.accountForSlot(this, selectedSlot)
+                val chosen = SimDialAccounts.select(this, selectedSlot)
+                val account = chosen.handle
                 if (account == null) {
-                    callControlError = "FAILED: Android cannot securely select SIM ${selectedSlot + 1}"
-                    Hub.log("Directed SIM call rejected: no uniquely mapped Telecom phone account")
+                    val reason = when (chosen.reason) {
+                        SimDialAccounts.Unavailable.UNSUPPORTED_ANDROID ->
+                            "SIM selection requires Android 11 or newer"
+                        SimDialAccounts.Unavailable.NO_PERMISSION ->
+                            "Phone state permission is needed for SIM selection"
+                        SimDialAccounts.Unavailable.AMBIGUOUS_ACCOUNT ->
+                            "Multiple SIM phone accounts match; select on the Gateway instead"
+                        else -> "Android cannot verify an enabled SIM voice account"
+                    }
+                    callControlError = "FAILED: SIM ${selectedSlot + 1} unavailable — $reason"
+                    Hub.log("Directed SIM call rejected: ${chosen.reason}")
                     return
                 }
                 extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, account)
