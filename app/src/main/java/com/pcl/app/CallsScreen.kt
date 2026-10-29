@@ -715,7 +715,7 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
         AlertDialog(
             onDismissRequest = { confirmClear = false },
             title = { Text("Clear SIM call history?") },
-            text = { Text("This removes the list on this phone only. The Gateway's own call log isn't touched.") },
+            text = { Text("Remove saved SIM calls from this PCL phone only. Android's call log and contacts are not changed.") },
             confirmButton = { TextButton(onClick = { CallHistory.clearSim(); confirmClear = false; expanded = null }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
         )
