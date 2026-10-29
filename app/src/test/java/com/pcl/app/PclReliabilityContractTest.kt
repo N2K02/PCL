@@ -31,6 +31,17 @@ class PclReliabilityContractTest {
         assertTrue(service.contains("if (ContactStore.saveSynced(this, data))"))
     }
 
+    @Test fun onlyAcknowledgedRejectMayConfirmDeclinedHistory() {
+        val service = source("LinkService")
+        assertTrue(service.contains("pendingReject = requestGateway(\"REJECT\")"))
+        assertTrue(service.contains("pendingCallAccepted = true"))
+        assertTrue(service.contains("pendingDeclineRecord?.let { CallHistory.confirmDeclined(it) }"))
+        assertTrue(service.contains("if (confirmed && pendingCallAccepted)"))
+        val history = source("CallHistory")
+        assertTrue(history.contains("fun confirmDeclined(missed: Record): Boolean"))
+        assertTrue(history.contains("if (!save(updated)) return false"))
+    }
+
     @Test fun callResultsHaveRequestIdsAndStaleSocketCannotCloseFreshLink() {
         val service = source("LinkService")
         assertTrue(service.contains("request.toString()"))

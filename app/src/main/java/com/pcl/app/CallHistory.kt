@@ -265,6 +265,29 @@ object CallHistory {
         lastDialAt = 0L
     }
 
+    /** Only a Gateway-acknowledged Reject can revise the uniquely saved
+     * missed call if its final IDLE was delivered ahead of the acknowledgement. */
+    @Synchronized
+    fun confirmDeclined(missed: Record): Boolean {
+        if (!loaded || missed.type != Type.MISSED) return false
+        val rows = _records.value
+        val indices = rows.indices.filter { index ->
+            val row = rows[index]
+            row.type == Type.MISSED && row.at == missed.at &&
+                CallerId.asNumber(row.number) == CallerId.asNumber(missed.number) &&
+                row.simSlot == missed.simSlot
+        }
+        if (indices.size != 1) return false
+        val updated = rows.toMutableList().also { rowsList ->
+            val index = indices.single()
+            rowsList[index] = rowsList[index].copy(type = Type.DECLINED)
+        }
+        if (!save(updated)) return false
+        _records.value = updated
+        setUnseen((_unseenMissed.value - 1).coerceAtLeast(0))
+        return true
+    }
+
     /** The Remote declined a ringing call, so its end is "declined", not "missed". */
     @Synchronized
     fun onDeclinedHere() {

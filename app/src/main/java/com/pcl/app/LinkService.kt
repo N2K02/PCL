@@ -402,6 +402,8 @@ class LinkService : Service() {
     @Volatile private var pendingCallCommand: String? = null
     @Volatile private var pendingAnswer = false
     @Volatile private var pendingReject = false
+    @Volatile private var pendingCallAccepted = false
+    private var pendingDeclineRecord: CallHistory.Record? = null
 
     @Volatile private var running = false
     @Volatile private var generation = 0
@@ -544,8 +546,7 @@ class LinkService : Service() {
         } else {
             // Keep ringing until the Gateway confirms OFFHOOK; a failed answer
             // must not silently dismiss the incoming call.
-            pendingAnswer = true
-            requestGateway("ANSWER")
+            pendingAnswer = requestGateway("ANSWER")
         }
     }
 
@@ -554,8 +555,7 @@ class LinkService : Service() {
             gatewayEnd(rejectRinging = true)
         } else {
             // Mark Declined only once the Gateway confirms the rejection.
-            pendingReject = true
-            requestGateway("REJECT")
+            pendingReject = requestGateway("REJECT")
         }
     }
 
@@ -568,8 +568,7 @@ class LinkService : Service() {
         if (role == ROLE_GATEWAY) {
             gatewayDial(number)
         } else {
-            requestGateway("DIAL", number)
-            if (callControlError?.startsWith("PENDING:") == true) {
+            if (requestGateway("DIAL", number)) {
                 CallHistory.onDialRequested(number, name)
                 simDialAt = SystemClock.elapsedRealtime()
             }
@@ -592,8 +591,7 @@ class LinkService : Service() {
             callControlError = "FAILED: Selected SIM does not have a verified voice account"
             Hub.notifyUi()
         } else {
-            requestGateway("DIAL_SIM", number, slot)
-            if (callControlError?.startsWith("PENDING:") == true) {
+            if (requestGateway("DIAL_SIM", number, slot)) {
                 CallHistory.onDialRequested(number, name)
                 simDialAt = SystemClock.elapsedRealtime()
             }
@@ -612,21 +610,29 @@ class LinkService : Service() {
         }
     }
 
-    private fun requestGateway(command: String, argument: String = "", selectedSlot: Int? = null) {
+    private fun requestGateway(command: String, argument: String = "", selectedSlot: Int? = null): Boolean {
         if (!connected || !helloReceived || peerProtocol != Protocol.VERSION) {
             callControlError = "FAILED: Connect two phones running the same PCL version"
-            pendingAnswer = false
-            pendingReject = false
             Hub.notifyUi()
-            return
+            return false
         }
         if (command == "DIAL_SIM" && selectedSlot == null) {
             callControlError = "FAILED: No SIM selected"
             Hub.notifyUi()
-            return
+            return false
+        }
+        // No duplicate requests. Allow Reject/Hangup to supersede a pending
+        // Answer/Dial so the caller can still stop an unwanted call.
+        if (pendingCallCommand != null) {
+            if (pendingCallCommand == command || command !in setOf("REJECT", "HANGUP")) {
+                Hub.log("Call-control request already pending")
+                return false
+            }
+            clearPendingCall()
         }
         val request = ++callControlRequest
         pendingCallCommand = command
+        pendingCallAccepted = false
         callControlError = "PENDING: Waiting for Gateway confirmation"
         when (command) {
             "DIAL" -> send(command, argument, request.toString())
@@ -642,6 +648,7 @@ class LinkService : Service() {
             }
         }, CALL_CONTROL_TIMEOUT_MS)
         Hub.notifyUi()
+        return true
     }
 
     private fun clearPendingCall() {
@@ -650,6 +657,8 @@ class LinkService : Service() {
             simDialAt = 0L
         }
         pendingCallCommand = null
+        pendingCallAccepted = false
+        pendingDeclineRecord = null
         pendingAnswer = false
         pendingReject = false
     }
@@ -657,8 +666,10 @@ class LinkService : Service() {
     /** A protocol acknowledgement is not proof that the telephone changed state. */
     private fun confirmCallState() {
         val confirmed = CallControlProtocol.stateConfirmed(pendingCallCommand, callState)
-        if (confirmed) {
+        if (confirmed && pendingCallAccepted) {
             pendingCallCommand = null
+            pendingCallAccepted = false
+            pendingDeclineRecord = null
             pendingAnswer = false
             pendingReject = false
             callControlError = null
@@ -963,12 +974,15 @@ class LinkService : Service() {
                 availableSimSlots = p.getOrNull(8).orEmpty().split(",")
                     .mapNotNull { it.toIntOrNull()?.takeIf { index -> index in 0..1 } }
                     .toSet()
-                if (callState == CALL_IDLE && previousState == CALL_RINGING && pendingReject &&
-                    callControlError?.startsWith("FAILED:") != true) {
-                    CallHistory.onDeclinedHere()
-                }
-                CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
+                val savedCall = CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
                     p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L })
+                // The Gateway's IDLE may arrive before the Reject ACK. Keep the
+                // saved Missed candidate for a verified, exactly-matched correction.
+                if (pendingReject && !pendingCallAccepted &&
+                    previousState == CALL_RINGING && callState == CALL_IDLE &&
+                    savedCall?.type == CallHistory.Type.MISSED) {
+                    pendingDeclineRecord = savedCall
+                }
 
                 onRemoteCallUpdate(previousState)
                 confirmCallState()
@@ -1051,7 +1065,11 @@ class LinkService : Service() {
                     clearPendingCall()
                     Hub.log("Gateway call control failed: $detail")
                 } else {
-                    if (pendingReject && callState == CALL_RINGING) CallHistory.onDeclinedHere()
+                    pendingCallAccepted = true
+                    if (pendingReject) {
+                        if (callState == CALL_RINGING) CallHistory.onDeclinedHere()
+                        else pendingDeclineRecord?.let { CallHistory.confirmDeclined(it) }
+                    }
                     Hub.log("Gateway accepted call-control request #$request; awaiting call state")
                     callControlError = "PENDING: Waiting for confirmed phone state"
                     confirmCallState()
