@@ -102,7 +102,8 @@ object CallHistory {
         }
         return record.copy(number = number, name = name,
             sourceApp = CallerId.clean(record.sourceApp).takeIf {
-                it.isNotBlank() && !CallerId.isPlaceholder(it) && it != "-"
+                it.isNotBlank() && it.lowercase() !in setOf(
+                    "unknown", "unknown number", "unknown caller", "-", "n/a", "null")
             })
     }
 
