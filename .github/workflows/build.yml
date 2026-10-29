@@ -98,6 +98,31 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
+      - name: Restore encrypted signing keystore
+        env:
+          SIGNING_KEYSTORE_ENC_BASE64: ${{ secrets.SIGNING_KEYSTORE_ENC_BASE64 }}
+          SIGNING_PASSPHRASE: ${{ secrets.SIGNING_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "$SIGNING_KEYSTORE_ENC_BASE64" ] && [ -n "$SIGNING_PASSPHRASE" ]; then
+            # Encryption: openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt.
+            # Decrypt to the same path used by the established release signing config.
+            umask 077
+            printf '%s' "$SIGNING_KEYSTORE_ENC_BASE64" | base64 --decode |
+              openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+                -pass env:SIGNING_PASSPHRASE -out app/debug.keystore
+            test -s app/debug.keystore
+            echo "Encrypted signing material restored"
+          elif [ -z "$SIGNING_KEYSTORE_ENC_BASE64" ] && [ -z "$SIGNING_PASSPHRASE" ]; then
+            # Temporary backwards-compatible path until migration secrets are configured.
+            test -s app/debug.keystore || { echo "::error::Signing keystore missing"; exit 1; }
+            echo "::warning::Legacy repository keystore in use. Configure SIGNING_KEYSTORE_ENC_BASE64 and SIGNING_PASSPHRASE to complete encrypted signing migration."
+          else
+            echo "::error::Both signing secrets must be configured together"
+            exit 1
+          fi
+
       - name: Test and build APK
         run: |
           echo "Android SDK: ${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
