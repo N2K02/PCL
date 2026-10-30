@@ -688,6 +688,12 @@ class LinkService : Service() {
         pendingReject = false
     }
 
+    /** Prevent the Remote from claiming calls before its correlated ACK and OFFHOOK. */
+    private fun remoteOwnsPendingCall(): Boolean = RemoteCallOwnershipPolicy.claims(
+        pendingAnswer, pendingCallCommand, pendingCallAccepted, callState,
+        simDialAt, SystemClock.elapsedRealtime(), DIAL_WINDOW_MS
+    )
+
     /** A protocol acknowledgement is not proof that the telephone changed state. */
     private fun confirmCallState() {
         val confirmed = CallControlProtocol.stateConfirmed(pendingCallCommand, callState)
@@ -1103,9 +1109,7 @@ class LinkService : Service() {
                     pendingCallAccepted = true
                     // The CALL state may reach the Remote before its correlated ACK.
                     // Claim ownership only once both conditions are true.
-                    if (callState == CALL_OFFHOOK && (pendingAnswer ||
-                        (pendingCallCommand in setOf("DIAL", "DIAL_SIM") && simDialAt > 0L &&
-                            SystemClock.elapsedRealtime() - simDialAt < DIAL_WINDOW_MS))) {
+                    if (remoteOwnsPendingCall()) {
                         simCallHere = true
                         simCallOnGateway = false
                         showOngoingCall()
@@ -1676,13 +1680,7 @@ class LinkService : Service() {
             }
             CALL_OFFHOOK -> {
                 stopSimRinging()
-                if (pendingAnswer && pendingCallAccepted) simCallHere = true
-                if (previous == CALL_IDLE) {
-                    simCallHere = simCallHere || (pendingCallAccepted &&
-                        pendingCallCommand in setOf("DIAL", "DIAL_SIM") &&
-                        simDialAt > 0L &&
-                        SystemClock.elapsedRealtime() - simDialAt < DIAL_WINDOW_MS)
-                }
+                if (remoteOwnsPendingCall()) simCallHere = true
                 // The dial marker is cleared by confirmed ACK+OFFHOOK, failure,
                 // call end or disconnect; not by an unrelated OFFHOOK event.
                 if (simCallHere) {
