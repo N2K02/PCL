@@ -28,8 +28,9 @@ object Protocol {
      *  - 8: remote-selectable Gateway volume modes and synchronized mode status
      *  - 9: verified SIM dialing and acknowledged optional CallLog enrichment
      *  - 10: call-control request IDs and confirmed connection compatibility
+     *  - 11: match Answer/Reject/Hangup to the live Gateway SIM call instance
      */
-    const val VERSION = 10
+    const val VERSION = 11
 }
 
 /**
