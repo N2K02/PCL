@@ -9,3 +9,22 @@ internal object GatewayCallCommandPolicy {
         else -> false
     }
 }
+
+/** Correlated ACK + actual connected state are both required to claim Remote ownership. */
+internal object RemoteCallOwnershipPolicy {
+    fun claims(
+        pendingAnswer: Boolean,
+        pendingCommand: String?,
+        accepted: Boolean,
+        state: String,
+        dialStartedAtMs: Long,
+        nowMs: Long,
+        dialWindowMs: Long,
+    ): Boolean {
+        if (!accepted || state != LinkService.CALL_OFFHOOK) return false
+        if (pendingAnswer && pendingCommand == "ANSWER") return true
+        return pendingCommand in setOf("DIAL", "DIAL_SIM") &&
+            dialStartedAtMs > 0L && nowMs >= dialStartedAtMs &&
+            nowMs - dialStartedAtMs < dialWindowMs
+    }
+}
