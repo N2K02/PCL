@@ -569,7 +569,7 @@ class LinkService : Service() {
         } else {
             // Keep ringing until the Gateway confirms OFFHOOK; a failed answer
             // must not silently dismiss the incoming call.
-            pendingAnswer = requestGateway("ANSWER")
+            requestGateway("ANSWER")
         }
     }
 
@@ -578,7 +578,7 @@ class LinkService : Service() {
             gatewayEnd(rejectRinging = true)
         } else {
             // Mark Declined only once the Gateway confirms the rejection.
-            pendingReject = requestGateway("REJECT")
+            requestGateway("REJECT")
         }
     }
 
@@ -656,6 +656,10 @@ class LinkService : Service() {
         val request = ++callControlRequest
         pendingCallCommand = command
         pendingCallAccepted = false
+        // Set ownership before sending: the Bluetooth reader can receive OFFHOOK/IDLE
+        // before answer()/reject() returns on the UI thread.
+        pendingAnswer = command == "ANSWER"
+        pendingReject = command == "REJECT"
         callControlError = "PENDING: Waiting for Gateway confirmation"
         when (command) {
             "DIAL" -> send(command, argument, request.toString())
@@ -860,6 +864,9 @@ class LinkService : Service() {
                 callState = CALL_IDLE
                 callSimIdentity = null
                 availableSimSlots = emptySet()
+                simCallHere = false
+                simCallOnGateway = false
+                simDialAt = 0L
                 nm.cancel(ID_INCOMING)
             }
         }
@@ -908,6 +915,9 @@ class LinkService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         connectionState = "Stopped"
         callState = CALL_IDLE
+        simCallHere = false
+        simCallOnGateway = false
+        simDialAt = 0L
         Hub.log("Stopped")
     }
 
@@ -1521,12 +1531,14 @@ class LinkService : Service() {
             return
         }
         try {
+            // Default and selected-SIM dial requests share the same call-state guard.
+            // A delayed Bluetooth request must not start a second call unexpectedly.
+            if ((currentGatewayPhoneState() ?: callState) != CALL_IDLE) {
+                callControlError = "FAILED: A SIM call is already active"
+                return
+            }
             val extras = Bundle()
             if (selectedSlot != null) {
-                if (callState != CALL_IDLE) {
-                    callControlError = "FAILED: Cannot select SIM during an active call"
-                    return
-                }
                 val selection = SimDialAccounts.select(this, selectedSlot)
                 val handle = selection.handle
                 if (handle == null) {
@@ -1566,6 +1578,10 @@ class LinkService : Service() {
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun gatewayAnswer() {
+        if ((currentGatewayPhoneState() ?: callState) != CALL_RINGING) {
+            callControlError = "FAILED: No ringing SIM call to answer"
+            return
+        }
         if (!has(Manifest.permission.ANSWER_PHONE_CALLS)) {
             callControlError = "FAILED: Phone permission missing on Gateway"
             return
@@ -1583,6 +1599,15 @@ class LinkService : Service() {
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun gatewayEnd(rejectRinging: Boolean = false) {
+        val observed = currentGatewayPhoneState() ?: callState
+        if (rejectRinging && observed != CALL_RINGING) {
+            callControlError = "FAILED: No ringing SIM call to reject"
+            return
+        }
+        if (!rejectRinging && observed != CALL_OFFHOOK) {
+            callControlError = "FAILED: No connected SIM call to hang up"
+            return
+        }
         if (Build.VERSION.SDK_INT < 28) {
             callControlError = "FAILED: Ending SIM calls requires Android 9 or newer"
             return
@@ -1634,10 +1659,11 @@ class LinkService : Service() {
                 if (previous != CALL_RINGING) {
                     simCallHere = false
                     simCallOnGateway = false
+                    simDialAt = 0L
                     Hub.log("Incoming call (${logCaller()})")
+                    startRinging()
                 }
                 showIncoming()
-                startRinging()
             }
             CALL_OFFHOOK -> {
                 stopSimRinging()
@@ -1646,6 +1672,8 @@ class LinkService : Service() {
                     simCallHere = simCallHere || (simDialAt > 0L &&
                         SystemClock.elapsedRealtime() - simDialAt < DIAL_WINDOW_MS)
                 }
+                // Ownership belongs to exactly one call, not the entire 60-second window.
+                simDialAt = 0L
                 if (simCallHere) {
                     simCallOnGateway = false
                     showOngoingCall()
@@ -1661,6 +1689,7 @@ class LinkService : Service() {
             else -> {
                 simCallHere = false
                 simCallOnGateway = false
+                simDialAt = 0L
                 stopSimRinging()
                 nm.cancel(ID_INCOMING)
                 if (previous != CALL_IDLE) Hub.log("Call ended")
