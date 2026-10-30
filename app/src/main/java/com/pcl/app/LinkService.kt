@@ -829,7 +829,8 @@ class LinkService : Service() {
         socket = s
         val w = FrameWriter(s.outputStream)
         writer = w
-        val peer = try {
+        try {
+            val peer = try {
             s.remoteDevice.name ?: s.remoteDevice.address
         } catch (e: Exception) {
             "peer"
@@ -848,8 +849,7 @@ class LinkService : Service() {
             sendCallState()
             sendContactsFingerprint()
         }
-        val input = DataInputStream(BufferedInputStream(s.inputStream, 16384))
-        try {
+            val input = DataInputStream(BufferedInputStream(s.inputStream, 16384))
             while (alive(gen)) {
                 val type = input.readUnsignedByte()
                 val len = input.readInt()
@@ -869,22 +869,22 @@ class LinkService : Service() {
                 if (socket === s) socket = null
                 connected = false
                 clearPendingAudioRequests()
-            contactBuf = null
-            expectedContactHash = null
-            helloReceived = false
-            if (role == ROLE_REMOTE) {
-                if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
-                clearPendingCall()
-                stopRinging()
-                CallHistory.onLinkLost()
-                callState = CALL_IDLE
-                callSimIdentity = null
-                availableSimSlots = emptySet()
-                simCallHere = false
-                simCallOnGateway = false
-                simDialAt = 0L
-                nm.cancel(ID_INCOMING)
-            }
+                contactBuf = null
+                expectedContactHash = null
+                helloReceived = false
+                if (role == ROLE_REMOTE) {
+                    if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
+                    clearPendingCall()
+                    stopRinging()
+                    CallHistory.onLinkLost()
+                    callState = CALL_IDLE
+                    callSimIdentity = null
+                    availableSimSlots = emptySet()
+                    simCallHere = false
+                    simCallOnGateway = false
+                    simDialAt = 0L
+                    nm.cancel(ID_INCOMING)
+                }
             }
         }
     }
