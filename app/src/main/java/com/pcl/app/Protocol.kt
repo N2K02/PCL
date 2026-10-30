@@ -29,8 +29,9 @@ object Protocol {
      *  - 9: verified SIM dialing and acknowledged optional CallLog enrichment
      *  - 10: call-control request IDs and confirmed connection compatibility
      *  - 11: match Answer/Reject/Hangup to the live Gateway SIM call instance
+     *  - 12: bind volume/route commands to the live SIM call instance
      */
-    const val VERSION = 11
+    const val VERSION = 12
 }
 
 /**
