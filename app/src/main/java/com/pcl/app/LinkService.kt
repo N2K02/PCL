@@ -405,6 +405,9 @@ class LinkService : Service() {
     @Volatile private var pendingAnswer = false
     @Volatile private var pendingReject = false
     @Volatile private var pendingCallAccepted = false
+    /** Timestamp identity of the live Gateway SIM call. */
+    @Volatile private var activeCallToken: Long? = null
+    @Volatile private var pendingCallToken: Long? = null
     private var pendingDeclineRecord: CallHistory.Record? = null
 
     @Volatile private var running = false
@@ -633,6 +636,11 @@ class LinkService : Service() {
             Hub.notifyUi()
             return false
         }
+        if (command in setOf("ANSWER", "REJECT", "HANGUP") && activeCallToken == null) {
+            callControlError = "FAILED: Gateway call identity is not synchronized"
+            Hub.notifyUi()
+            return false
+        }
         if (command == "DIAL_SIM" && selectedSlot == null) {
             callControlError = "FAILED: No SIM selected"
             Hub.notifyUi()
@@ -649,6 +657,7 @@ class LinkService : Service() {
         }
         val request = ++callControlRequest
         pendingCallCommand = command
+        pendingCallToken = if (command in setOf("ANSWER", "REJECT", "HANGUP")) activeCallToken else null
         pendingCallAccepted = false
         // Set ownership before sending: the Bluetooth reader can receive OFFHOOK/IDLE
         // before answer()/reject() returns on the UI thread.
@@ -662,7 +671,7 @@ class LinkService : Service() {
         when (command) {
             "DIAL" -> send(command, argument, request.toString())
             "DIAL_SIM" -> send(command, argument, selectedSlot.toString(), request.toString())
-            else -> send(command, request.toString())
+            else -> send(command, request.toString(), pendingCallToken?.toString().orEmpty())
         }
         trafficHandler.postDelayed({
             if (request == callControlRequest && callControlError?.startsWith("PENDING:") == true) {
@@ -682,6 +691,7 @@ class LinkService : Service() {
             simDialAt = 0L
         }
         pendingCallCommand = null
+        pendingCallToken = null
         pendingCallAccepted = false
         pendingDeclineRecord = null
         pendingAnswer = false
@@ -700,6 +710,7 @@ class LinkService : Service() {
         if (confirmed && pendingCallAccepted) {
             if (pendingCallCommand in setOf("DIAL", "DIAL_SIM")) simDialAt = 0L
             pendingCallCommand = null
+            pendingCallToken = null
             pendingCallAccepted = false
             pendingDeclineRecord = null
             pendingAnswer = false
@@ -878,6 +889,7 @@ class LinkService : Service() {
                     stopRinging()
                     CallHistory.onLinkLost()
                     callState = CALL_IDLE
+                    activeCallToken = null
                     callSimIdentity = null
                     availableSimSlots = emptySet()
                     simCallHere = false
@@ -932,6 +944,7 @@ class LinkService : Service() {
         stopForeground(STOP_FOREGROUND_REMOVE)
         connectionState = "Stopped"
         callState = CALL_IDLE
+        activeCallToken = null
         simCallHere = false
         simCallOnGateway = false
         simDialAt = 0L
@@ -1002,7 +1015,15 @@ class LinkService : Service() {
             // gateway -> remote
             "CALL" -> {
                 val previousState = callState
-                callState = arg1.takeIf { it in setOf(CALL_IDLE, CALL_RINGING, CALL_OFFHOOK) } ?: CALL_IDLE
+                val nextState = arg1.takeIf { it in setOf(CALL_IDLE, CALL_RINGING, CALL_OFFHOOK) } ?: return
+                val nextToken = p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L }
+                if (nextState != CALL_IDLE && activeCallToken != null && nextToken != null &&
+                    activeCallToken != nextToken && pendingCallToken != null) {
+                    Hub.log("Canceled call control for superseded SIM call")
+                    clearPendingCall()
+                }
+                callState = nextState
+                activeCallToken = if (nextState == CALL_IDLE) null else nextToken
                 // Stop the ringtone before potentially slow synchronous call-history I/O.
                 if (callState != CALL_RINGING) stopSimRinging()
                 if (callState == CALL_RINGING && pendingCallCommand == null) callControlError = null
@@ -1064,10 +1085,16 @@ class LinkService : Service() {
                 if (role == ROLE_GATEWAY) PendingSimEnrichment.acknowledge(this, arg1)
             }
             // remote -> gateway
-            "ANSWER" -> { callControlError = null; gatewayAnswer(); sendCallResult(p.getOrNull(1).orEmpty()) }
+            "ANSWER" -> {
+                callControlError = null
+                if (gatewayTokenMatches(p.getOrNull(2))) gatewayAnswer()
+                else callControlError = "FAILED: Incoming call changed before Answer arrived"
+                sendCallResult(p.getOrNull(1).orEmpty())
+            }
             "REJECT", "HANGUP" -> {
                 callControlError = null
-                gatewayEnd(rejectRinging = cmd == "REJECT")
+                if (gatewayTokenMatches(p.getOrNull(2))) gatewayEnd(rejectRinging = cmd == "REJECT")
+                else callControlError = "FAILED: SIM call changed before $cmd arrived"
                 sendCallResult(p.getOrNull(1).orEmpty())
             }
             "DIAL" -> { callControlError = null; gatewayDial(arg1); sendCallResult(p.getOrNull(2).orEmpty()) }
@@ -1199,6 +1226,9 @@ class LinkService : Service() {
         }
         Hub.notifyUi()
     }
+
+    private fun gatewayTokenMatches(raw: String?): Boolean =
+        SimCallTokenPolicy.matches(simCallStartedMs, raw)
 
     private fun sendCallResult(requestId: String) {
         val error = callControlError
@@ -1413,6 +1443,8 @@ class LinkService : Service() {
             }
             refreshPhoneDetails(current)
             if (current != callState) {
+                if (current != CALL_IDLE && simCallStartedMs <= 0L)
+                    simCallStartedMs = System.currentTimeMillis()
                 callState = current
                 // A snapshot cannot reliably identify call direction or caller number.
                 callDirection = ""
