@@ -72,6 +72,13 @@ Android only lets the phone's own dialer send keypad tones into a call, so PCL c
 
 The Remote needs no internet: other-app calls run on the Gateway with the Gateway's mobile data. The Remote only needs internet (Wi-Fi, for example) to download PCL updates; otherwise install the new APK on it by hand.
 
+## Concurrent calls and call waiting
+
+- Install the **same PCL build on both phones** (Bluetooth protocol v11). Remote Answer, Decline and Hangup now carry the exact Gateway call identifier, so delayed actions from an older call cannot control a newer call.
+- If PCL observes a waiting call while another SIM call is connected, or detects multiple busy SIM subscriptions, it stops Remote ringing, disables Remote call controls and asks you to use the **Gateway's native dialer**. Ambiguous call-history entries are not saved.
+- Android's ordinary phone-state APIs do not expose reliable individual call objects during call waiting, especially with two calls on the same SIM. Full separate-call hold/swap/answer/end controls would require an authorized default-dialer/InCallService architecture; PCL does not claim these capabilities.
+- On both devices, verify answering, declining, rapid consecutive calls, Bluetooth loss/reconnect, lock-screen notification actions, dual-SIM selection and call waiting before promoting the experimental build.
+
 ## Limitations
 
 - **SIM call controls depend on Android and the manufacturer.** PCL uses the public Android Telecom API. Some phones restrict answering or ending cellular calls for non-default dialers. PCL does not currently implement notification-button fallback, hidden APIs, root or ADB. Ending a call through this API requires Android 9 (API 28) or newer. Android 8 devices can still pair and view call state, but cannot use PCL to end calls.
