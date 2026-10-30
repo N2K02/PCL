@@ -84,6 +84,55 @@ class GatewayAudioRoutePolicyTest {
         assertTrue(link.contains("pendingRouteVerification = null"))
     }
 
+
+    @Test fun audioRequestsCarryLiveCallTokenAndRejectStaleGatewayCommands() {
+        val service = source("LinkService")
+        val outgoing = service.substringAfter("private fun sendAudioRequest(")
+            .substringBefore("fun requestGatewayVolume(")
+        assertTrue(outgoing.contains("activeCallToken == null"))
+        assertTrue(outgoing.contains("callControlsRestricted"))
+        assertTrue(outgoing.contains("send(command, value, id, token.toString())"))
+        val incoming = service.substringAfter("private fun handleCommand(")
+            .substringBefore("private fun gatewayTokenMatches(")
+        assertTrue(incoming.contains("gatewayAudioCommandAllowed(p.getOrNull(3), \"MODE\""))
+        assertTrue(incoming.contains("gatewayAudioCommandAllowed(p.getOrNull(3), \"VOLUME\""))
+        assertTrue(incoming.contains("gatewayAudioCommandAllowed(p.getOrNull(3), \"STEP\""))
+        assertTrue(incoming.contains("gatewayAudioCommandAllowed(p.getOrNull(3), \"ROUTE\""))
+        assertTrue(service.contains("SimCallTokenPolicy.matches(simCallStartedMs, token)"))
+        assertTrue(service.contains("send(\"AUDIO_RESULT\", kind, \"STALE_CALL\", requestId)"))
+    }
+
+    @Test fun notificationAudioControlsRequireSameConnectedCallAndGatewaySimState() {
+        val link = source("LinkService")
+        val notificationActions = link.substringAfter("ACTION_AUDIO_DOWN, ACTION_AUDIO_UP ->")
+            .substringBefore("ACTION_CALL_BACK ->")
+        assertTrue(notificationActions.contains("validNotificationCallAction(intent)"))
+        assertTrue(link.contains("ACTION_AUDIO_DOWN, ACTION_AUDIO_UP, ACTION_AUDIO_SPEAKER ->"))
+        assertTrue(link.contains("callState == CALL_OFFHOOK && currentGatewayPhoneState() == CALL_OFFHOOK"))
+        assertFalse(link.contains("val active = callState == CALL_OFFHOOK ||"))
+        assertTrue(link.contains("Gateway audio result:"))
+        val screen = source("CallsScreen")
+        assertTrue(screen.contains("ui.gatewayAudioError?.let"))
+        val main = source("MainActivity")
+        assertTrue(main.contains("gatewayAudioError = service?.gatewayAudioError"))
+    }
+
+    @Test fun incomingRemoteCallStateNeverBlocksOnContactDatabaseLookup() {
+        val link = source("LinkService")
+        val packet = link.substringAfter("\"CALL\" -> {")
+            .substringBefore("\"CALL_LOGGED\" -> {")
+        assertFalse(packet.contains("resolveUniqueContactNumber(callName)"))
+        assertTrue(packet.contains("if (callState != CALL_RINGING || callControlsRestricted) stopSimRinging()"))
+    }
+
+    @Test fun experimentalWorkflowBuildsR8MinifiedReleaseBeforeMerge() {
+        val path = ".github/workflows/build.yml"
+        val ci = listOf(File(path), File("../$path")).first { it.isFile }.readText()
+        assertTrue(ci.contains("testDebugUnitTest assembleDebug assembleRelease"))
+        assertTrue(ci.contains("testDebugUnitTest assembleRelease"))
+        assertTrue(source("Protocol").contains("const val VERSION = 12"))
+    }
+
     private fun source(name: String): String {
         val p = "app/src/main/java/com/pcl/app/$name.kt"
         return listOf(File(p), File("../$p")).first { it.isFile }.readText()
