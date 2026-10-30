@@ -726,7 +726,7 @@ class LinkService : Service() {
             var s: BluetoothSocket? = null
             var sessionStartedAt = 0L
             try {
-                s = if (role == ROLE_GATEWAY) acceptOne(gen) else connectOnce()
+                s = if (role == ROLE_GATEWAY) acceptOne(gen) else connectOnce(gen)
                 if (s != null && alive(gen)) {
                     sessionStartedAt = SystemClock.elapsedRealtime()
                     runSession(s, gen)
@@ -796,17 +796,21 @@ class LinkService : Service() {
                 ss.close()
             } catch (e: Exception) {
             }
-            serverSocket = null
+            if (serverSocket === ss) serverSocket = null
         }
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectOnce(): BluetoothSocket {
+    private fun connectOnce(gen: Int): BluetoothSocket {
         val a = adapter()
         val addr = deviceAddress ?: throw IOException("No gateway phone selected")
         val dev = a.getRemoteDevice(addr)
         setConn(false, "Connecting to ${dev.name ?: addr}…")
         val s = dev.createRfcommSocketToServiceRecord(Protocol.SERVICE_UUID)
+        if (!alive(gen)) {
+            s.close()
+            throw IOException("Bluetooth session replaced")
+        }
         socket = s
         try {
             s.connect()
@@ -818,6 +822,10 @@ class LinkService : Service() {
 
     @SuppressLint("MissingPermission")
     private fun runSession(s: BluetoothSocket, gen: Int) {
+        if (!alive(gen)) {
+            s.close()
+            return
+        }
         socket = s
         val w = FrameWriter(s.outputStream)
         writer = w
@@ -854,10 +862,13 @@ class LinkService : Service() {
                 }
             }
         } finally {
-            if (writer === w) writer = null
-            if (socket === s) socket = null
-            connected = false
-            clearPendingAudioRequests()
+            // Only the owner of the *current* session may clear live state.
+            // An old reader can terminate after a new generation has connected.
+            if (writer === w) {
+                writer = null
+                if (socket === s) socket = null
+                connected = false
+                clearPendingAudioRequests()
             contactBuf = null
             expectedContactHash = null
             helloReceived = false
@@ -873,6 +884,7 @@ class LinkService : Service() {
                 simCallOnGateway = false
                 simDialAt = 0L
                 nm.cancel(ID_INCOMING)
+            }
             }
         }
     }
