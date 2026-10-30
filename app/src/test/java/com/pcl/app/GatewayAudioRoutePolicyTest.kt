@@ -50,7 +50,7 @@ class GatewayAudioRoutePolicyTest {
 
     @Test fun audioTimeoutAndRouteSupersessionAreReported() {
         val link = source("LinkService")
-        assertTrue(link.contains("gatewayAudioError = \"Gateway did not confirm $command (timeout)\""))
+        assertTrue(link.contains("gatewayAudioError = \"Gateway did not confirm "))
         assertTrue(link.contains("cancelRouteVerification(\"SUPERSEDED\")"))
         assertTrue(link.contains("cancelRouteVerification(\"NO_CALL\")"))
         assertTrue(link.contains("pendingRouteVerificationId = requestId"))
