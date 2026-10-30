@@ -66,4 +66,13 @@ class SimCallConcurrencySafetyTest {
         assertTrue(lock.contains("rejectForCall(presentedToken)"))
         assertTrue(lock.contains("if (!submitted)"))
     }
+
+    @Test fun ambiguousSimTimelineDoesNotCreateFalseMissedHistory() {
+        val service = source("LinkService")
+        val remote = service.substringAfter("\"CALL\" -> {").substringBefore("\"CALL_LOGGED\" -> {")
+        assertTrue(remote.contains("if (callControlsRestricted && !wasRestricted) CallHistory.onLinkLost()"))
+        assertTrue(remote.contains("val savedCall = if (callControlsRestricted) null else"))
+        assertTrue(remote.contains("callControlError = \"FAILED: Call changed before Gateway confirmation\""))
+        assertTrue(source("CallHistory").contains("if (!recovery.shouldTrack(state)) return null"))
+    }
 }
