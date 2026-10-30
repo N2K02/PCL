@@ -315,6 +315,7 @@ class MainActivity : ComponentActivity() {
                         callDisplay = service?.display().orEmpty(),
                         simStatus = service?.callControlError,
                         simOnGateway = service?.simCallOnGateway == true,
+                        controlsRestricted = service?.callControlsRestricted == true,
                         contacts = contacts,
                         gatewayVolume = service?.gatewayVolume ?: 0,
                         gatewayMaxVolume = service?.gatewayMaxVolume ?: 1,
@@ -567,6 +568,11 @@ class MainActivity : ComponentActivity() {
                         if (callState == LinkService.CALL_RINGING || callState == LinkService.CALL_OFFHOOK) {
                             Text(service?.display().orEmpty(), style = MaterialTheme.typography.bodyLarge)
                         }
+                        if (service?.callControlsRestricted == true) {
+                            Text("Call waiting or multiple SIM calls detected. Answer, decline and end calls directly on the Gateway.",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium)
+                        }
                         if (remote && service?.simCallOnGateway == true) {
                             Text("Taken on the Gateway, so this phone stays quiet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -585,15 +591,18 @@ class MainActivity : ComponentActivity() {
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                             if (callState == LinkService.CALL_RINGING) {
-                                Button(onClick = { service?.answer() }, modifier = Modifier.weight(1f)) {
+                                Button(onClick = { service?.answer() }, enabled = service?.callControlsRestricted != true,
+                                    modifier = Modifier.weight(1f)) {
                                     Icon(Icons.Default.Call, null); Spacer(Modifier.width(6.dp)); Text("Answer")
                                 }
-                                OutlinedButton(onClick = { service?.reject() }, modifier = Modifier.weight(1f)) {
+                                OutlinedButton(onClick = { service?.reject() }, enabled = service?.callControlsRestricted != true,
+                                    modifier = Modifier.weight(1f)) {
                                     Icon(Icons.Default.Close, null); Spacer(Modifier.width(6.dp)); Text("Reject")
                                 }
                             }
                             if (callState == LinkService.CALL_OFFHOOK) {
-                                Button(onClick = { service?.hangUp() }, modifier = Modifier.fillMaxWidth(),
+                                Button(onClick = { service?.hangUp() }, enabled = service?.callControlsRestricted != true,
+                                    modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
                                     Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(8.dp)); Text("Hang up")
                                 }
