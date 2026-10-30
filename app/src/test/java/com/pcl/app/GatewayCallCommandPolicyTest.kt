@@ -96,4 +96,25 @@ class GatewayCallCommandPolicyTest {
             .substringBefore("private fun showOngoingCall()")
         assertTrue(remote.contains("if (remoteOwnsPendingCall()) simCallHere = true"))
     }
+
+    @Test fun gatewayDialDoesNotBlockBluetoothReaderOnContactLookup() {
+        val path = "app/src/main/java/com/pcl/app/LinkService.kt"
+        val service = listOf(File(path), File("../$path")).first { it.isFile }.readText()
+        val dial = service.substringAfter("private fun gatewayDial(")
+            .substringBefore("private fun lookupName(")
+        assertFalse(dial.contains("callName = lookupName(n)"))
+        assertTrue(dial.contains("callNumber = previousNumber"))
+        assertTrue(dial.contains("callName = previousName"))
+        assertTrue(dial.contains("callDirection = previousDirection"))
+        assertTrue(service.contains("private fun refreshPhoneDetails("))
+    }
+
+    @Test fun disconnectedCallNotificationDoesNotUseDeviceBootAsStartTime() {
+        val path = "app/src/main/java/com/pcl/app/LinkService.kt"
+        val service = listOf(File(path), File("../$path")).first { it.isFile }.readText()
+        val ongoing = service.substringAfter("private fun showOngoingCall()")
+            .substringBefore("private fun startRinging()")
+        assertTrue(ongoing.contains(".setUsesChronometer(connectedAt > 0L)"))
+        assertTrue(ongoing.contains("else System.currentTimeMillis()"))
+    }
 }
