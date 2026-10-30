@@ -69,6 +69,21 @@ class GatewayAudioRoutePolicyTest {
         assertTrue(link.contains("if (actual == route) \"APPLIED\" else \"NOT_APPLIED\""))
     }
 
+
+    @Test fun audioCommandsReportFailuresRatherThanSilentlyTimingOut() {
+        val link = source("LinkService")
+        val volume = link.substringAfter("private fun gatewaySetAudioVolume(")
+            .substringBefore("private fun gatewaySetAudioRoute(")
+        assertTrue(volume.contains("send(\"AUDIO_RESULT\", \"VOLUME\", \"INVALID\", requestId)"))
+        val step = link.substringAfter("private fun gatewayAudioStep(")
+            .substringBefore("private fun gatewayAvailableRoutes(")
+        assertTrue(step.contains("send(\"AUDIO_RESULT\", \"STEP\", \"INVALID\", requestId)"))
+        assertTrue(link.contains("ownsLegacyBluetoothSco = true"))
+        assertTrue(link.contains("if (ownsLegacyBluetoothSco)"))
+        assertTrue(link.contains("if (role == ROLE_GATEWAY) releaseGatewayAudioRoute()"))
+        assertTrue(link.contains("pendingRouteVerification = null"))
+    }
+
     private fun source(name: String): String {
         val p = "app/src/main/java/com/pcl/app/$name.kt"
         return listOf(File(p), File("../$p")).first { it.isFile }.readText()
