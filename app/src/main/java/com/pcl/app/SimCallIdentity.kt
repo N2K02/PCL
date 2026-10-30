@@ -62,6 +62,23 @@ internal object SimCallSelection {
 }
 
 internal object SimCallDetector {
+
+    /** Best-effort concurrent-SIM detection; never infer the target of a Telecom action. */
+    @SuppressLint("MissingPermission")
+    fun hasMultipleBusySubscriptions(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) !=
+            PackageManager.PERMISSION_GRANTED) return false
+        return runCatching {
+            val sm = context.getSystemService(SubscriptionManager::class.java) ?: return false
+            val tm = context.getSystemService(TelephonyManager::class.java) ?: return false
+            val states = sm.activeSubscriptionInfoList.orEmpty().map { sub ->
+                runCatching { tm.createForSubscriptionId(sub.subscriptionId).callStateForSubscription }
+                    .getOrNull()
+            }
+            states.count { it != null && it != TelephonyManager.CALL_STATE_IDLE } > 1
+        }.getOrDefault(false)
+    }
     @SuppressLint("MissingPermission")
     fun identify(context: Context, callState: String): SimCallIdentity? {
         if (callState != LinkService.CALL_RINGING && callState != LinkService.CALL_OFFHOOK) return null
