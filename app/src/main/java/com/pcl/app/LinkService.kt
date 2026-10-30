@@ -214,8 +214,10 @@ class LinkService : Service() {
     private fun gatewayAudioCommandAllowed(
         token: String?, kind: String, requestId: String,
     ): Boolean {
-        if (callState != CALL_IDLE && !callControlsRestricted &&
-            SimCallTokenPolicy.matches(simCallStartedMs, token)) return true
+        val observed = currentGatewayPhoneState()
+        if (callState != CALL_IDLE && observed != null && observed != CALL_IDLE &&
+            !callControlsRestricted && SimCallTokenPolicy.matches(simCallStartedMs, token))
+            return true
         send("AUDIO_RESULT", kind, "STALE_CALL", requestId)
         return false
     }
