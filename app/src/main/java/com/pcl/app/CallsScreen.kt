@@ -108,6 +108,7 @@ class CallsUi(
     val simStatus: String?,
     /** The SIM call was answered or placed on the Gateway itself. */
     val simOnGateway: Boolean,
+    val controlsRestricted: Boolean = false,
     val contacts: List<Contact>,
     val gatewayVolume: Int,
     val gatewayMaxVolume: Int,
@@ -235,6 +236,11 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     Text(ui.callDisplay, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            if (ui.controlsRestricted) {
+                Text("Concurrent SIM calls or call waiting: use the Gateway phone for Answer, Decline or Hangup.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium)
+            }
             if (ui.connected) {
                 LaunchedEffect(ui.callState) {
                     while (true) {
@@ -270,6 +276,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                 if (ringing) {
                     FilledTonalButton(
                         onClick = actions.reject,
+                        enabled = !ui.controlsRestricted,
                         colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError,
@@ -278,6 +285,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     ) { Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(6.dp)); Text("Decline") }
                     FilledTonalButton(
                         onClick = actions.answer,
+                        enabled = !ui.controlsRestricted,
                         colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
                             containerColor = CallGreen, contentColor = Color.White,
                         ),
@@ -286,6 +294,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                 } else {
                     FilledTonalButton(
                         onClick = actions.hangUp,
+                        enabled = !ui.controlsRestricted,
                         colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError,
