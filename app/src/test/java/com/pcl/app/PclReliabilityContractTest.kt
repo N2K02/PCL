@@ -37,7 +37,7 @@ class PclReliabilityContractTest {
 
     @Test fun onlyAcknowledgedRejectMayConfirmDeclinedHistory() {
         val service = source("LinkService")
-        assertTrue(service.contains("pendingReject = requestGateway(\"REJECT\")"))
+        assertTrue(service.contains("pendingReject = command == \"REJECT\""))
         assertTrue(service.contains("pendingCallAccepted = true"))
         assertTrue(service.contains("pendingDeclineRecord?.let { CallHistory.confirmDeclined(it) }"))
         assertTrue(service.contains("if (confirmed && pendingCallAccepted)"))
