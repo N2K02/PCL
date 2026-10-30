@@ -55,4 +55,45 @@ class GatewayCallCommandPolicyTest {
         assertTrue(initial.contains("startRinging()"))
         assertFalse(initial.substringAfter("showIncoming()").contains("startRinging()"))
     }
+
+    @Test fun answerOwnershipRequiresBothCorrelatedAckAndOffhook() {
+        fun owns(acked: Boolean, state: String) =
+            RemoteCallOwnershipPolicy.claims(true, "ANSWER", acked, state, 0L, 200L, 60_000L)
+        // CALL may arrive before CALL_RESULT or vice versa.
+        assertFalse(owns(false, LinkService.CALL_OFFHOOK))
+        assertFalse(owns(true, LinkService.CALL_RINGING))
+        assertTrue(owns(true, LinkService.CALL_OFFHOOK))
+        assertFalse(RemoteCallOwnershipPolicy.claims(true, "REJECT", true,
+            LinkService.CALL_OFFHOOK, 0L, 200L, 60_000L))
+    }
+
+    @Test fun dialOwnershipExpiresAfterSingleCallAndRequiresAcknowledgement() {
+        fun owns(command: String?, ack: Boolean, time: Long, now: Long) =
+            RemoteCallOwnershipPolicy.claims(false, command, ack,
+                LinkService.CALL_OFFHOOK, time, now, 60_000L)
+        assertTrue(owns("DIAL", true, 1_000L, 2_000L))
+        assertTrue(owns("DIAL_SIM", true, 1_000L, 2_000L))
+        assertFalse(owns("DIAL", false, 1_000L, 2_000L))
+        assertFalse(owns(null, true, 1_000L, 2_000L))
+        assertFalse(owns("DIAL", true, 1_000L, 61_000L))
+        assertFalse(owns("DIAL", true, 1_000L, 999L))
+        assertFalse(owns("DIAL", true, 0L, 2_000L))
+    }
+
+    @Test fun serviceTracksDialBeforeWriteAndResolvesOwnershipOnLateAck() {
+        val path = "app/src/main/java/com/pcl/app/LinkService.kt"
+        val service = listOf(File(path), File("../$path")).first { it.isFile }.readText()
+        val request = service.substringAfter("private fun requestGateway(")
+            .substringBefore("private fun clearPendingCall()")
+        assertTrue(request.indexOf("CallHistory.onDialRequested(argument, displayName)") <
+            request.indexOf("else -> send(command, request.toString())"))
+        assertTrue(request.indexOf("simDialAt = SystemClock.elapsedRealtime()") <
+            request.indexOf("else -> send(command, request.toString())"))
+        val ack = service.substringAfter("\"CALL_RESULT\" -> {")
+            .substringBefore("\"CONTACTS_HASH\" -> {")
+        assertTrue(ack.indexOf("pendingCallAccepted = true") < ack.indexOf("if (remoteOwnsPendingCall())"))
+        val remote = service.substringAfter("private fun onRemoteCallUpdate(")
+            .substringBefore("private fun showOngoingCall()")
+        assertTrue(remote.contains("if (remoteOwnsPendingCall()) simCallHere = true"))
+    }
 }
