@@ -265,11 +265,18 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                 // Gateway status remains the source of truth after it responds.
                 var localVolume by remember { mutableStateOf(ui.gatewayVolume.toFloat()) }
                 var isDraggingVolume by remember { mutableStateOf(false) }
-                LaunchedEffect(ui.gatewayVolume, ui.gatewayMaxVolume, isDraggingVolume) {
+                LaunchedEffect(ui.gatewayVolume, ui.gatewayMaxVolume) {
                     if (!isDraggingVolume) localVolume = ui.gatewayVolume.toFloat()
                 }
-                Text("Gateway volume: " + (if (isDraggingVolume) localVolume.roundToInt()
-                    else ui.gatewayVolume) + " / " + ui.gatewayMaxVolume)
+                // Leave the submitted thumb in place briefly, then fall back to the
+                // Gateway's reported level if Android refused or delayed the change.
+                LaunchedEffect(isDraggingVolume) {
+                    if (!isDraggingVolume) {
+                        delay(1_500L)
+                        if (!isDraggingVolume) localVolume = ui.gatewayVolume.toFloat()
+                    }
+                }
+                Text("Gateway volume: " + localVolume.roundToInt() + " / " + ui.gatewayMaxVolume)
                 Slider(
                     value = localVolume.coerceIn(0f, ui.gatewayMaxVolume.coerceAtLeast(1).toFloat()),
                     onValueChange = { localVolume = it; isDraggingVolume = true },
