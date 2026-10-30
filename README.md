@@ -82,7 +82,7 @@ The Remote needs no internet: other-app calls run on the Gateway with the Gatewa
 
 ## Concurrent calls and call waiting
 
-- Install the **same PCL build on both phones** (Bluetooth protocol v11). Remote Answer, Decline and Hangup now carry the exact Gateway call identifier, so delayed actions from an older call cannot control a newer call.
+- Install the **same PCL build on both phones** (Bluetooth protocol v12). Remote Answer, Decline and Hangup now carry the exact Gateway call identifier, so delayed actions from an older call cannot control a newer call.
 - If PCL observes a waiting call while another SIM call is connected, or detects multiple busy SIM subscriptions, it stops Remote ringing, disables Remote call controls and asks you to use the **Gateway's native dialer**. Ambiguous call-history entries are not saved.
 - Android's ordinary phone-state APIs do not expose reliable individual call objects during call waiting, especially with two calls on the same SIM. Full separate-call hold/swap/answer/end controls would require an authorized default-dialer/InCallService architecture; PCL does not claim these capabilities.
 - On both devices, verify answering, declining, rapid consecutive calls, Bluetooth loss/reconnect, lock-screen notification actions, dual-SIM selection and call waiting before promoting the experimental build.
