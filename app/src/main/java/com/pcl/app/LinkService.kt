@@ -135,6 +135,8 @@ class LinkService : Service() {
         private set
     @Volatile var gatewayAudioRoute = "UNKNOWN"
         private set
+    @Volatile var gatewayAvailableAudioRoutes: Set<String> = emptySet()
+        private set
 
     @Volatile var gatewayVolumeMode = "AUTO"
         private set
@@ -180,9 +182,9 @@ class LinkService : Service() {
     }
 
     fun requestGatewayRoute(route: String) {
-        // The Gateway owns the authoritative call state; never silently drop a
-        // request because the Remote has not received the latest call update.
-        if (role == ROLE_REMOTE && connected && route in setOf("SPEAKER", "EARPIECE"))
+        // The Gateway owns the authoritative call state and validates availability.
+        // Do not reject the click just because a device-status snapshot is stale.
+        if (role == ROLE_REMOTE && connected && GatewayAudioRoutePolicy.valid(route))
             sendAudioRequest("AUDIO_ROUTE", route)
     }
 
@@ -230,6 +232,25 @@ class LinkService : Service() {
         } finally { gatewayAudioStatus() }
     }
 
+    /** Only telephony-capable Bluetooth endpoints qualify, never media-only A2DP. */
+    private fun gatewayAvailableRoutes(audio: AudioManager): Set<String> {
+        val types = if (Build.VERSION.SDK_INT >= 31) {
+            audio.availableCommunicationDevices.filter { it.isSink }.map { it.type }
+        } else {
+            audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.isSink }.map { it.type }
+        }
+        return GatewayAudioRoutePolicy.available(types)
+    }
+
+    /** Explicit PCL routing overrides must not remain after the SIM call ends. */
+    private var ownsCommunicationRoute = false
+    private fun releaseGatewayAudioRoute() {
+        if (role == ROLE_GATEWAY && ownsCommunicationRoute && Build.VERSION.SDK_INT >= 31) {
+            runCatching { getSystemService(AudioManager::class.java)?.clearCommunicationDevice() }
+        }
+        ownsCommunicationRoute = false
+    }
+
     private fun gatewayRoute(audio: AudioManager): String {
         if (Build.VERSION.SDK_INT < 31) {
             @Suppress("DEPRECATION")
@@ -248,23 +269,40 @@ class LinkService : Service() {
         }
     }
 
+    private var pendingRouteVerification: Runnable? = null
+    private fun cancelRouteVerification() {
+        pendingRouteVerification?.let(audioTimeoutHandler::removeCallbacks)
+        pendingRouteVerification = null
+    }
+
     private fun verifyGatewayRouteLater(route: String, requestId: String) {
-        audioTimeoutHandler.postDelayed({
-            if (!running || role != ROLE_GATEWAY || !connected) return@postDelayed
-            val audio = getSystemService(AudioManager::class.java) ?: return@postDelayed
+        cancelRouteVerification()
+        val session = writer
+        val task = Runnable {
+            pendingRouteVerification = null
+            if (!running || role != ROLE_GATEWAY || !connected || writer !== session ||
+                callState == CALL_IDLE) return@Runnable
+            val audio = getSystemService(AudioManager::class.java) ?: return@Runnable
             val actual = gatewayRoute(audio)
             val outcome = if (actual == route) "APPLIED" else "NOT_APPLIED"
             Hub.log("Gateway delayed route verification: requested=$route actual=$actual result=$outcome")
             send("AUDIO_RESULT", "ROUTE_VERIFY", outcome, requestId)
             gatewayAudioStatus()
-        }, 900L)
+        }
+        pendingRouteVerification = task
+        audioTimeoutHandler.postDelayed(task, 1_200L)
     }
 
     private fun gatewayAudioStatus() {
         val audio = getSystemService(AudioManager::class.java) ?: return
-        val stream = gatewayStream(audio)
-        send("AUDIO_STATUS", audio.getStreamVolume(stream).toString(),
-            audio.getStreamMaxVolume(stream).toString(), gatewayRoute(audio), selectedGatewayVolumeMode)
+        try {
+            val stream = gatewayStream(audio)
+            send("AUDIO_STATUS", audio.getStreamVolume(stream).toString(),
+                audio.getStreamMaxVolume(stream).toString(), gatewayRoute(audio), selectedGatewayVolumeMode,
+                gatewayAvailableRoutes(audio).sorted().joinToString(","))
+        } catch (e: Exception) {
+            Hub.log("Gateway audio status unavailable: ${e.javaClass.simpleName}")
+        }
     }
 
     private fun gatewaySetAudioVolume(raw: String, requestId: String = "") {
@@ -287,40 +325,65 @@ class LinkService : Service() {
     }
 
     private fun gatewaySetAudioRoute(route: String, requestId: String = "") {
-        if (route !in setOf("SPEAKER", "EARPIECE")) {
+        if (!GatewayAudioRoutePolicy.valid(route)) {
             send("AUDIO_RESULT", "ROUTE", "INVALID", requestId)
             return
         }
-        val audio = getSystemService(AudioManager::class.java) ?: return
-        val active = callState != CALL_IDLE ||
+        val audio = getSystemService(AudioManager::class.java)
+        if (audio == null) {
+            send("AUDIO_RESULT", "ROUTE", "ERROR", requestId)
+            return
+        }
+        val active = callState == CALL_OFFHOOK ||
             audio.mode == AudioManager.MODE_IN_CALL ||
             audio.mode == AudioManager.MODE_IN_COMMUNICATION
-        if (!active) {
-            Hub.log("Gateway audio route not applied: no active communication")
+        if (!active || callControlsRestricted) {
+            Hub.log("Gateway audio route not applied: no unambiguous connected SIM call")
             send("AUDIO_RESULT", "ROUTE", "NO_CALL", requestId)
             gatewayAudioStatus()
             return
         }
         try {
+            if (route !in gatewayAvailableRoutes(audio)) {
+                Hub.log("Gateway audio route unavailable: $route")
+                send("AUDIO_RESULT", "ROUTE", "UNAVAILABLE", requestId)
+                gatewayAudioStatus()
+                return
+            }
+            cancelRouteVerification()
             Hub.log("Gateway audio route requested: $route; mode=${audio.mode}")
             val accepted = if (Build.VERSION.SDK_INT >= 31) {
-                val type = if (route == "SPEAKER") AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-                val target = audio.availableCommunicationDevices.firstOrNull { it.type == type }
-                target != null && audio.setCommunicationDevice(target)
+                val target = audio.availableCommunicationDevices.firstOrNull {
+                    it.isSink && GatewayAudioRoutePolicy.matches(route, it.type)
+                }
+                target != null && audio.setCommunicationDevice(target).also {
+                    if (it) ownsCommunicationRoute = true
+                }
             } else {
                 @Suppress("DEPRECATION")
-                audio.isSpeakerphoneOn = route == "SPEAKER"
+                when (route) {
+                    "BLUETOOTH" -> {
+                        audio.startBluetoothSco()
+                        audio.isBluetoothScoOn = true
+                    }
+                    "SPEAKER", "EARPIECE" -> {
+                        // In-call Bluetooth SCO may be owned by the system dialer.
+                        // This is best effort; the actual route is checked below.
+                        audio.isBluetoothScoOn = false
+                        audio.isSpeakerphoneOn = route == "SPEAKER"
+                    }
+                }
                 true
             }
-            val verifiedRoute = gatewayRoute(audio)
-            val outcome = when {
-                verifiedRoute == route -> "APPLIED"
+            val actual = gatewayRoute(audio)
+            val result = when {
+                actual == route -> "APPLIED"
                 accepted -> "PENDING"
                 else -> "NOT_APPLIED"
             }
-            Hub.log("Gateway audio route: requested=$route, actual=$verifiedRoute, outcome=$outcome")
-            send("AUDIO_RESULT", "ROUTE", outcome, requestId)
-            if (outcome == "PENDING") verifyGatewayRouteLater(route, requestId)
+            Hub.log("Gateway audio route: requested=$route actual=$actual result=$result")
+            send("AUDIO_RESULT", "ROUTE", result, requestId)
+            if (result == "PENDING") verifyGatewayRouteLater(route, requestId)
         } catch (e: Exception) {
             Hub.log("Gateway audio route failed: ${e.javaClass.simpleName}")
             send("AUDIO_RESULT", "ROUTE", "ERROR", requestId)
@@ -926,6 +989,9 @@ class LinkService : Service() {
                 if (socket === s) socket = null
                 connected = false
                 clearPendingAudioRequests()
+                cancelRouteVerification()
+                gatewayAvailableAudioRoutes = emptySet()
+                gatewayAudioRoute = "UNKNOWN"
                 contactBuf = null
                 expectedContactHash = null
                 helloReceived = false
@@ -981,6 +1047,10 @@ class LinkService : Service() {
         connected = false
         clearPendingCall()
         clearPendingAudioRequests()
+        cancelRouteVerification()
+        releaseGatewayAudioRoute()
+        gatewayAvailableAudioRoutes = emptySet()
+        gatewayAudioRoute = "UNKNOWN"
         stopRinging()
         verifiedSimSlots = emptySet()
         if (receiverRegistered) {
@@ -1196,6 +1266,8 @@ class LinkService : Service() {
                 gatewayMaxVolume = (p.getOrNull(2)?.toIntOrNull() ?: 1).coerceAtLeast(1)
                 gatewayAudioRoute = p.getOrNull(3).orEmpty().takeIf { it in setOf("SPEAKER", "EARPIECE", "BLUETOOTH", "WIRED_HEADSET") } ?: "UNKNOWN"
                 gatewayVolumeMode = p.getOrNull(4).orEmpty().takeIf { it in volumeModes } ?: "AUTO"
+                gatewayAvailableAudioRoutes = p.getOrNull(5).orEmpty().split(",")
+                    .filter(GatewayAudioRoutePolicy::valid).toSet()
             }
             "CALL_RESULT" -> {
                 val request = p.getOrNull(2)?.toIntOrNull()
@@ -1424,6 +1496,8 @@ class LinkService : Service() {
             return
         }
         if (newState == CALL_IDLE) {
+            releaseGatewayAudioRoute()
+            cancelRouteVerification()
             callWaitingSeen = false
             multipleActiveSimCalls = false
             updateControlRestriction()
