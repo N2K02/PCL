@@ -51,4 +51,27 @@ class SimRuntimeIntegrationTest {
         assertTrue(source("CallHistory").contains("SimHistoryEnrichment.findUnique("))
         assertTrue(source("CallsScreen").contains("CallHistory.clearSim()"))
     }
+
+    @Test fun staleBluetoothReaderCannotClearFreshSession() {
+        val service = source("LinkService")
+        val reader = service.substringAfter("private fun runSession(")
+            .substringBefore("private fun closeSocket()")
+        assertTrue(reader.contains("if (!alive(gen))"))
+        assertTrue(reader.contains("if (writer === w) {"))
+        val ownerGuard = reader.substringAfter("if (writer === w) {")
+        assertTrue(ownerGuard.indexOf("connected = false") > ownerGuard.indexOf("writer = null"))
+        assertTrue(ownerGuard.contains("stopRinging()"))
+        assertTrue(service.contains("if (serverSocket === ss) serverSocket = null"))
+        assertTrue(service.contains("private fun connectOnce(gen: Int)"))
+    }
+
+    @Test fun streamInitializationFailureStillExecutesSessionCleanup() {
+        val service = source("LinkService")
+        val session = service.substringAfter("private fun runSession(")
+            .substringBefore("private fun closeSocket()")
+        assertTrue(session.contains("try {\n            val peer = try {"))
+        val setup = session.indexOf("val input = DataInputStream")
+        val cleanup = session.indexOf("} finally {\n            // Only the owner")
+        assertTrue("Input setup must be protected by the session finally", setup in 1 until cleanup)
+    }
 }
