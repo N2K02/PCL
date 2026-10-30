@@ -1069,6 +1069,7 @@ class LinkService : Service() {
                 val nextToken = p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L }
                 if (nextState != CALL_IDLE && activeCallToken != null && nextToken != null &&
                     activeCallToken != nextToken && pendingCallToken != null) {
+                    callControlError = "FAILED: Call changed before Gateway confirmation"
                     Hub.log("Canceled call control for superseded SIM call")
                     clearPendingCall()
                 }
