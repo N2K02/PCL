@@ -36,9 +36,9 @@ class GatewayCallCommandPolicyTest {
         val request = service.substringAfter("private fun requestGateway(")
             .substringBefore("private fun clearPendingCall()")
         assertTrue(request.indexOf("pendingAnswer = command == \"ANSWER\"") <
-            request.indexOf("else -> send(command, request.toString())"))
+            request.indexOf("else -> send(command, request.toString(), pendingCallToken?.toString().orEmpty())"))
         assertTrue(request.indexOf("pendingReject = command == \"REJECT\"") <
-            request.indexOf("else -> send(command, request.toString())"))
+            request.indexOf("else -> send(command, request.toString(), pendingCallToken?.toString().orEmpty())"))
         val remote = service.substringAfter("private fun onRemoteCallUpdate(")
             .substringBefore("private fun showOngoingCall()")
         assertTrue(remote.contains("simDialAt = 0L"))
@@ -86,9 +86,9 @@ class GatewayCallCommandPolicyTest {
         val request = service.substringAfter("private fun requestGateway(")
             .substringBefore("private fun clearPendingCall()")
         assertTrue(request.indexOf("CallHistory.onDialRequested(argument, displayName)") <
-            request.indexOf("else -> send(command, request.toString())"))
+            request.indexOf("else -> send(command, request.toString(), pendingCallToken?.toString().orEmpty())"))
         assertTrue(request.indexOf("simDialAt = SystemClock.elapsedRealtime()") <
-            request.indexOf("else -> send(command, request.toString())"))
+            request.indexOf("else -> send(command, request.toString(), pendingCallToken?.toString().orEmpty())"))
         val ack = service.substringAfter("\"CALL_RESULT\" -> {")
             .substringBefore("\"CONTACTS_HASH\" -> {")
         assertTrue(ack.indexOf("pendingCallAccepted = true") < ack.indexOf("if (remoteOwnsPendingCall())"))
