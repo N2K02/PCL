@@ -429,25 +429,34 @@ class LinkService : Service() {
     private val pendingCallLogTasks = mutableSetOf<Runnable>()
     private var receiverRegistered = false
     private var ringtone: Ringtone? = null
+    private var callWaitingSeen = false
+    private var multipleActiveSimCalls = false
+    @Volatile var callControlsRestricted = false
+        private set
+
+    private fun updateControlRestriction() {
+        callControlsRestricted = SimCallConcurrencyPolicy.shouldBlock(callWaitingSeen, multipleActiveSimCalls)
+    }
 
     /** Gateway: recover phone-state transitions missed by the Android broadcast. */
     private val gatewayPhoneStateRecheck = object : Runnable {
         override fun run() {
-            if (!running || role != ROLE_GATEWAY || callState != CALL_RINGING) return
+            if (!running || role != ROLE_GATEWAY || callState == CALL_IDLE) return
             val observed = currentGatewayPhoneState()
-            if (GatewayRingStateSync.changedWhileRinging(callState, observed)) {
-                Hub.log("Recovered missing SIM phone-state transition: $observed")
+            if (SimCallConcurrencyPolicy.shouldRecheck(callState, observed, callWaitingSeen)) {
+                Hub.log("Reconciled SIM phone-state transition: $observed")
                 applyGatewayPhoneState(observed!!, null)
             } else {
-                trafficHandler.postDelayed(this, PHONE_STATE_RECHECK_MS)
+                scheduleGatewayPhoneStateRecheck()
             }
         }
     }
 
     private fun scheduleGatewayPhoneStateRecheck() {
         trafficHandler.removeCallbacks(gatewayPhoneStateRecheck)
-        if (running && role == ROLE_GATEWAY && callState == CALL_RINGING) {
-            trafficHandler.postDelayed(gatewayPhoneStateRecheck, PHONE_STATE_RECHECK_MS)
+        if (running && role == ROLE_GATEWAY && callState != CALL_IDLE) {
+            trafficHandler.postDelayed(gatewayPhoneStateRecheck,
+                if (callState == CALL_RINGING) PHONE_STATE_RECHECK_MS else 1_000L)
         }
     }
 
@@ -633,6 +642,11 @@ class LinkService : Service() {
     private fun requestGateway(command: String, argument: String = "", selectedSlot: Int? = null, displayName: String = ""): Boolean {
         if (!connected || !helloReceived || peerProtocol != Protocol.VERSION) {
             callControlError = "FAILED: Connect two phones running the same PCL version"
+            Hub.notifyUi()
+            return false
+        }
+        if (callControlsRestricted) {
+            callControlError = "FAILED: Concurrent SIM calls must be handled on the Gateway"
             Hub.notifyUi()
             return false
         }
@@ -890,6 +904,7 @@ class LinkService : Service() {
                     CallHistory.onLinkLost()
                     callState = CALL_IDLE
                     activeCallToken = null
+                    callControlsRestricted = false
                     callSimIdentity = null
                     availableSimSlots = emptySet()
                     simCallHere = false
@@ -945,6 +960,9 @@ class LinkService : Service() {
         connectionState = "Stopped"
         callState = CALL_IDLE
         activeCallToken = null
+        callWaitingSeen = false
+        multipleActiveSimCalls = false
+        callControlsRestricted = false
         simCallHere = false
         simCallOnGateway = false
         simDialAt = 0L
@@ -1024,8 +1042,9 @@ class LinkService : Service() {
                 }
                 callState = nextState
                 activeCallToken = if (nextState == CALL_IDLE) null else nextToken
+                callControlsRestricted = p.getOrNull(10) == "1"
                 // Stop the ringtone before potentially slow synchronous call-history I/O.
-                if (callState != CALL_RINGING) stopSimRinging()
+                if (callState != CALL_RINGING || callControlsRestricted) stopSimRinging()
                 if (callState == CALL_RINGING && pendingCallCommand == null) callControlError = null
                 callNumber = CallerId.asNumber(p.getOrElse(2) { "" })
                 val receivedName = p.getOrElse(3) { "" }.trim()
@@ -1348,6 +1367,21 @@ class LinkService : Service() {
     /** One state-transition path for both Android broadcasts and the ringing watchdog. */
     private fun applyGatewayPhoneState(newState: String, num: String?) {
         val previousState = callState
+        if (SimCallConcurrencyPolicy.isWaiting(previousState, newState)) {
+            if (!callWaitingSeen) {
+                callWaitingSeen = true
+                updateControlRestriction()
+                Hub.log("SIM call waiting detected; Remote call controls disabled until idle")
+                sendCallState()
+            }
+            scheduleGatewayPhoneStateRecheck()
+            return
+        }
+        if (newState == CALL_IDLE) {
+            callWaitingSeen = false
+            multipleActiveSimCalls = false
+            updateControlRestriction()
+        }
         val priorStart = simCallStartedMs
         val priorDirection = callDirection
         val priorNumber = callNumber
@@ -1465,6 +1499,7 @@ class LinkService : Service() {
         try {
             phoneDataExecutor.execute {
                 val sim = SimCallDetector.identify(this, state)
+                val concurrent = SimCallDetector.hasMultipleBusySubscriptions(this)
                 val name = if (number.isNotBlank()) lookupName(number) else ""
                 val slots = SimDialAccounts.availableSlots(this)
                 trafficHandler.post {
@@ -1472,6 +1507,11 @@ class LinkService : Service() {
                     verifiedSimSlots = slots
                     if (callState == state) {
                         var changed = false
+                        if (multipleActiveSimCalls != concurrent) {
+                            multipleActiveSimCalls = concurrent
+                            updateControlRestriction()
+                            changed = true
+                        }
                         if (state != CALL_IDLE && callNumber == number) {
                             if (sim != null && callSimIdentity != sim) {
                                 callSimIdentity = sim
@@ -1575,12 +1615,17 @@ class LinkService : Service() {
                 sim?.slotIndex?.toString().orEmpty(), encodeText(sim?.displayName.orEmpty()),
                 encodeText(sim?.carrier.orEmpty()),
                 verifiedSimSlots.sorted().joinToString(","),
-                (completedStart ?: simCallStartedMs).takeIf { it > 0L }?.toString().orEmpty())
+                (completedStart ?: simCallStartedMs).takeIf { it > 0L }?.toString().orEmpty(),
+                if (callControlsRestricted) "1" else "0")
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun gatewayDial(number: String, selectedSlot: Int? = null) {
+        if (callControlsRestricted) {
+            callControlError = "FAILED: Concurrent SIM calls must be handled on the Gateway"
+            return
+        }
         val n = CallerId.asNumber(number)
         if (n.isEmpty()) { callControlError = "FAILED: Invalid SIM phone number"; return }
         if (!has(Manifest.permission.CALL_PHONE)) {
@@ -1647,6 +1692,10 @@ class LinkService : Service() {
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun gatewayAnswer() {
+        if (callControlsRestricted) {
+            callControlError = "FAILED: Concurrent SIM calls must be handled on the Gateway"
+            return
+        }
         if (!GatewayCallCommandPolicy.allows("ANSWER", currentGatewayPhoneState() ?: callState)) {
             callControlError = "FAILED: No ringing SIM call to answer"
             return
@@ -1668,6 +1717,10 @@ class LinkService : Service() {
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun gatewayEnd(rejectRinging: Boolean = false) {
+        if (callControlsRestricted) {
+            callControlError = "FAILED: Concurrent SIM calls must be handled on the Gateway"
+            return
+        }
         val observed = currentGatewayPhoneState() ?: callState
         if (rejectRinging && !GatewayCallCommandPolicy.allows("REJECT", observed)) {
             callControlError = "FAILED: No ringing SIM call to reject"
@@ -1730,8 +1783,9 @@ class LinkService : Service() {
                     simCallOnGateway = false
                     simDialAt = 0L
                     Hub.log("Incoming call (${logCaller()})")
-                    startRinging()
+                    if (!callControlsRestricted) startRinging()
                 }
+                if (callControlsRestricted) stopSimRinging()
                 showIncoming()
             }
             CALL_OFFHOOK -> {
@@ -1782,7 +1836,10 @@ class LinkService : Service() {
             .addAction(action(android.R.drawable.ic_media_previous, "Volume −", actionPi(ACTION_AUDIO_DOWN, 31)))
             .addAction(action(android.R.drawable.ic_media_next, "Volume +", actionPi(ACTION_AUDIO_UP, 32)))
             .addAction(action(android.R.drawable.ic_lock_silent_mode_off, "Speaker / Earpiece", actionPi(ACTION_AUDIO_SPEAKER, 33)))
-            .addAction(action(android.R.drawable.ic_menu_close_clear_cancel, "End call", actionPi(ACTION_HANGUP, 13)))
+            .apply {
+                if (!callControlsRestricted) addAction(action(android.R.drawable.ic_menu_close_clear_cancel,
+                    "End call", actionPi(ACTION_HANGUP, 13)))
+            }
             .build()
         try {
             nm.notify(ID_INCOMING, n)
@@ -1982,6 +2039,10 @@ class LinkService : Service() {
 
     /** Remote SIM call notification. */
     private fun showIncoming() {
+        if (callControlsRestricted) {
+            nm.cancel(ID_INCOMING)
+            return
+        }
         val n = Notification.Builder(this, CH_CALLS)
             .setSmallIcon(android.R.drawable.sym_call_incoming)
             .setContentTitle("Incoming call")
