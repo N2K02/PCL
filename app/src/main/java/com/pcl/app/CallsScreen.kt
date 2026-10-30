@@ -262,32 +262,51 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                             )
                         }
                 }
-                // Drag locally; send one authoritative volume command on release.
-                // Gateway status remains the source of truth after it responds.
-                var localVolume by remember { mutableStateOf(ui.gatewayVolume.toFloat()) }
-                var isDraggingVolume by remember { mutableStateOf(false) }
-                LaunchedEffect(ui.gatewayVolume, ui.gatewayMaxVolume) {
-                    if (!isDraggingVolume) localVolume = ui.gatewayVolume.toFloat()
+                // Keep the Remote thumb optimistic until the Gateway confirms its
+                // real level, fails the request, or the command timeout expires.
+                // Intermediate AUDIO_STATUS snapshots must not jerk it backward.
+                var localVolume by remember(ui.callState) {
+                    mutableStateOf(ui.gatewayVolume.toFloat())
                 }
-                // Leave the submitted thumb in place briefly, then fall back to the
-                // Gateway's reported level if Android refused or delayed the change.
-                LaunchedEffect(isDraggingVolume) {
-                    if (!isDraggingVolume) {
-                        delay(1_500L)
-                        if (!isDraggingVolume) localVolume = ui.gatewayVolume.toFloat()
+                var isDraggingVolume by remember(ui.callState) { mutableStateOf(false) }
+                var pendingVolume by remember(ui.callState) { mutableStateOf<Int?>(null) }
+                LaunchedEffect(ui.gatewayVolume, pendingVolume) {
+                    if (pendingVolume == ui.gatewayVolume) pendingVolume = null
+                }
+                LaunchedEffect(ui.gatewayVolume, ui.gatewayMaxVolume, pendingVolume,
+                    isDraggingVolume) {
+                    if (!isDraggingVolume && pendingVolume == null)
+                        localVolume = ui.gatewayVolume.toFloat()
+                }
+                LaunchedEffect(pendingVolume) {
+                    if (pendingVolume != null) {
+                        delay(5_500L)
+                        pendingVolume = null
                     }
                 }
-                Text("Gateway volume: " + localVolume.roundToInt() + " / " + ui.gatewayMaxVolume)
+                LaunchedEffect(ui.gatewayAudioError) {
+                    if (ui.gatewayAudioError != null) pendingVolume = null
+                }
+                val visibleVolume = localVolume.roundToInt()
+                    .coerceIn(0, ui.gatewayMaxVolume.coerceAtLeast(1))
+                Text("Gateway volume: $visibleVolume / ${ui.gatewayMaxVolume}" +
+                    if (pendingVolume != null) " · applying…" else "")
                 Slider(
                     value = localVolume.coerceIn(0f, ui.gatewayMaxVolume.coerceAtLeast(1).toFloat()),
-                    onValueChange = { localVolume = it; isDraggingVolume = true },
+                    onValueChange = {
+                        pendingVolume = null
+                        localVolume = it
+                        isDraggingVolume = true
+                    },
                     onValueChangeFinished = {
                         val target = localVolume.roundToInt()
+                        pendingVolume = target
                         isDraggingVolume = false
                         actions.setGatewayVolume(target)
                     },
                     valueRange = 0f..ui.gatewayMaxVolume.coerceAtLeast(1).toFloat(),
                     steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0),
+                    enabled = !ui.controlsRestricted,
                 )
                 Text("SIM audio output: " + ui.gatewayAudioRoute)
                 ui.gatewayAudioError?.let { error ->
