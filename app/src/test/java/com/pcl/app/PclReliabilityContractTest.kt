@@ -51,7 +51,7 @@ class PclReliabilityContractTest {
         assertTrue(service.contains("request.toString()"))
         assertTrue(service.contains("CallControlProtocol.matchesResult("))
         assertTrue(service.contains("if (writer === w) closeSocket()"))
-        assertTrue(source("Protocol").contains("const val VERSION = 10"))
+        assertTrue(source("Protocol").contains("const val VERSION = 11"))
     }
 
     @Test fun phonesAndContactsNeverBlockBluetoothCommandReader() {
