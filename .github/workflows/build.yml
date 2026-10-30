@@ -168,7 +168,13 @@ jobs:
             VARIANT=Release
             OUTPUT=release/app-release.apk
           fi
-          ./gradlew --no-daemon testDebugUnitTest "assemble$VARIANT" -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
+          # Validate release R8/shrinking even on experimental PRs. A debug-only
+          # build can pass while the eventual minified main-branch release fails.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
+          else
+            ./gradlew --no-daemon testDebugUnitTest assembleRelease -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
+          fi
           cp "app/build/outputs/apk/$OUTPUT" "$APP-$VERSION.apk"
 
       - name: Publish APK release
