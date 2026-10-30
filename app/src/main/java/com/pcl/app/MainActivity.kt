@@ -321,6 +321,7 @@ class MainActivity : ComponentActivity() {
                         gatewayMaxVolume = service?.gatewayMaxVolume ?: 1,
                         gatewayAudioRoute = service?.gatewayAudioRoute ?: "UNKNOWN",
                         gatewayVolumeMode = service?.gatewayVolumeMode ?: "AUTO",
+                        gatewayAvailableAudioRoutes = service?.gatewayAvailableAudioRoutes.orEmpty(),
                         availableSimSlots = service?.availableSimSlots.orEmpty(),
                     ),
                     actions = CallsActions(
