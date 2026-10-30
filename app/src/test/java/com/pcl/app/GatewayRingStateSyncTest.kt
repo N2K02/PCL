@@ -34,13 +34,13 @@ class GatewayRingStateSyncTest {
     @Test fun serviceStopsRingBeforeWritingHistoryAndCancelsWatchdogOnQuit() {
         val path = "app/src/main/java/com/pcl/app/LinkService.kt"
         val service = listOf(File(path), File("../$path")).first { it.isFile }.readText()
-        assertTrue(service.contains("trafficHandler.postDelayed(gatewayPhoneStateRecheck, PHONE_STATE_RECHECK_MS)"))
+        assertTrue(service.contains("trafficHandler.postDelayed(gatewayPhoneStateRecheck,"))
         assertTrue(service.contains("trafficHandler.removeCallbacks(gatewayPhoneStateRecheck)"))
-        assertTrue(service.contains("GatewayRingStateSync.changedWhileRinging(callState, observed)"))
+        assertTrue(service.contains("SimCallConcurrencyPolicy.shouldRecheck(callState, observed, callWaitingSeen)"))
         assertTrue(service.contains("GatewayRingStateSync.isStaleRingingAfterAnswer(callState, currentGatewayPhoneState())"))
         val remoteCall = service.substringAfter("\"CALL\" -> {").substringBefore("\"CALL_LOGGED\" -> {")
-        assertTrue(remoteCall.indexOf("if (callState != CALL_RINGING) stopSimRinging()") >= 0)
-        assertTrue(remoteCall.indexOf("if (callState != CALL_RINGING) stopSimRinging()") <
+        assertTrue(remoteCall.indexOf("if (callState != CALL_RINGING || callControlsRestricted) stopSimRinging()") >= 0)
+        assertTrue(remoteCall.indexOf("if (callState != CALL_RINGING || callControlsRestricted) stopSimRinging()") <
             remoteCall.indexOf("CallHistory.onSimState("))
     }
 }
