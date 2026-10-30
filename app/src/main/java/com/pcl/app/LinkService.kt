@@ -937,6 +937,9 @@ class LinkService : Service() {
                     callState = CALL_IDLE
                     activeCallToken = null
                     callControlsRestricted = false
+                    callNumber = ""
+                    callName = ""
+                    callDirection = ""
                     callSimIdentity = null
                     availableSimSlots = emptySet()
                     simCallHere = false
@@ -992,6 +995,11 @@ class LinkService : Service() {
         connectionState = "Stopped"
         callState = CALL_IDLE
         activeCallToken = null
+        simCallStartedMs = 0L
+        callNumber = ""
+        callName = ""
+        callDirection = ""
+        callSimIdentity = null
         callWaitingSeen = false
         multipleActiveSimCalls = false
         callControlsRestricted = false
