@@ -155,12 +155,14 @@ class LinkService : Service() {
     }
 
     private val audioRequestSequence = AtomicLong()
+    @Volatile private var latestAudioRequestId: String? = null
     private val pendingAudioRequests = ConcurrentHashMap<String, Runnable>()
     private val audioTimeoutHandler = Handler(Looper.getMainLooper())
 
     private fun clearPendingAudioRequests() {
         pendingAudioRequests.values.forEach(audioTimeoutHandler::removeCallbacks)
         pendingAudioRequests.clear()
+        latestAudioRequestId = null
     }
 
     private fun sendAudioRequest(command: String, value: String) {
@@ -175,11 +177,14 @@ class LinkService : Service() {
         gatewayAudioError = null
         Hub.notifyUi()
         val id = audioRequestSequence.incrementAndGet().toString()
+        latestAudioRequestId = id
         val timeout = Runnable {
             if (pendingAudioRequests.remove(id) != null) {
-                gatewayAudioError = "Gateway did not confirm $command (timeout)"
+                if (latestAudioRequestId == id) {
+                    gatewayAudioError = "Gateway did not confirm $command (timeout)"
+                    Hub.notifyUi()
+                }
                 Hub.log("Audio command timed out: $command")
-                Hub.notifyUi()
             }
         }
         pendingAudioRequests[id] = timeout
@@ -1327,8 +1332,10 @@ class LinkService : Service() {
                 val timeout = pendingAudioRequests.remove(id)
                 if (timeout != null) {
                     audioTimeoutHandler.removeCallbacks(timeout)
-                    gatewayAudioError = if (outcome in setOf("APPLIED")) null
-                        else "Gateway $arg1: $outcome"
+                    if (id == latestAudioRequestId) {
+                        gatewayAudioError = if (outcome == "APPLIED") null
+                            else "Gateway $arg1: $outcome"
+                    }
                     Hub.log("Gateway audio result: ${arg1} — $outcome")
                 } else {
                     Hub.log("Ignoring stale audio acknowledgement")
