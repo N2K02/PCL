@@ -1074,7 +1074,11 @@ class LinkService : Service() {
                 }
                 callState = nextState
                 activeCallToken = if (nextState == CALL_IDLE) null else nextToken
+                val wasRestricted = callControlsRestricted
                 callControlsRestricted = p.getOrNull(10) == "1"
+                // When Android cannot identify which SIM call is active, discard
+                // the uncertain tracker timeline rather than invent a missed call.
+                if (callControlsRestricted && !wasRestricted) CallHistory.onLinkLost()
                 // Stop the ringtone before potentially slow synchronous call-history I/O.
                 if (callState != CALL_RINGING || callControlsRestricted) stopSimRinging()
                 if (callState == CALL_RINGING && pendingCallCommand == null) callControlError = null
@@ -1099,8 +1103,9 @@ class LinkService : Service() {
                 availableSimSlots = p.getOrNull(8).orEmpty().split(",")
                     .mapNotNull { it.toIntOrNull()?.takeIf { index -> index in 0..1 } }
                     .toSet()
-                val savedCall = CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
-                    p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L })
+                val savedCall = if (callControlsRestricted) null else
+                    CallHistory.onSimState(callState, callNumber, callName, callSimIdentity,
+                        p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L })
                 // The Gateway's IDLE may arrive before the Reject ACK. Keep the
                 // saved Missed candidate for a verified, exactly-matched correction.
                 if (pendingReject && !pendingCallAccepted &&
