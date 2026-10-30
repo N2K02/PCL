@@ -114,6 +114,7 @@ class CallsUi(
     val gatewayVolume: Int,
     val gatewayMaxVolume: Int,
     val gatewayAudioRoute: String,
+    val gatewayAudioError: String? = null,
     val gatewayVolumeMode: String,
     val gatewayAvailableAudioRoutes: Set<String> = emptySet(),
     val availableSimSlots: Set<Int> = emptySet(),
@@ -289,6 +290,10 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0),
                 )
                 Text("SIM audio output: " + ui.gatewayAudioRoute)
+                ui.gatewayAudioError?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("EARPIECE" to "Earpiece", "SPEAKER" to "Speaker",
                         "BLUETOOTH" to "Bluetooth").forEach { (route, label) ->
