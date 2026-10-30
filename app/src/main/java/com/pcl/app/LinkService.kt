@@ -135,6 +135,8 @@ class LinkService : Service() {
         private set
     @Volatile var gatewayAudioRoute = "UNKNOWN"
         private set
+    @Volatile var gatewayAudioError: String? = null
+        private set
     @Volatile var gatewayAvailableAudioRoutes: Set<String> = emptySet()
         private set
 
@@ -162,10 +164,14 @@ class LinkService : Service() {
     }
 
     private fun sendAudioRequest(command: String, value: String) {
-        if (role != ROLE_REMOTE || !connected) {
-            Hub.log("Audio command unavailable: Gateway disconnected")
+        if (role != ROLE_REMOTE || !connected || callControlsRestricted ||
+            callState == CALL_IDLE || activeCallToken == null) {
+            gatewayAudioError = "A synchronized SIM call is required for audio controls"
+            Hub.log("Audio command unavailable: no synchronized SIM call")
+            Hub.notifyUi()
             return
         }
+        val token = activeCallToken ?: return
         val id = audioRequestSequence.incrementAndGet().toString()
         val timeout = Runnable {
             if (pendingAudioRequests.remove(id) != null)
@@ -174,7 +180,7 @@ class LinkService : Service() {
         pendingAudioRequests[id] = timeout
         audioTimeoutHandler.postDelayed(timeout, 5_000L)
         Hub.log("Remote audio request: $command #$id")
-        send(command, value, id)
+        send(command, value, id, token.toString())
     }
 
     fun requestGatewayVolume(level: Int) {
@@ -202,6 +208,16 @@ class LinkService : Service() {
                 audio.mode == AudioManager.MODE_IN_COMMUNICATION -> AudioManager.STREAM_VOICE_CALL
             else -> AudioManager.STREAM_MUSIC
         }
+    }
+
+    /** Audio commands must not affect a different call if Bluetooth is delayed. */
+    private fun gatewayAudioCommandAllowed(
+        token: String?, kind: String, requestId: String,
+    ): Boolean {
+        if (callState != CALL_IDLE && !callControlsRestricted &&
+            SimCallTokenPolicy.matches(simCallStartedMs, token)) return true
+        send("AUDIO_RESULT", kind, "STALE_CALL", requestId)
+        return false
     }
 
     private fun gatewaySetVolumeMode(raw: String, requestId: String) {
@@ -1014,6 +1030,7 @@ class LinkService : Service() {
                 if (socket === s) socket = null
                 connected = false
                 clearPendingAudioRequests()
+                gatewayAudioError = null
                 cancelRouteVerification()
                 if (role == ROLE_GATEWAY) releaseGatewayAudioRoute()
                 gatewayAvailableAudioRoutes = emptySet()
@@ -1073,6 +1090,7 @@ class LinkService : Service() {
         connected = false
         clearPendingCall()
         clearPendingAudioRequests()
+        gatewayAudioError = null
         cancelRouteVerification()
         releaseGatewayAudioRoute()
         gatewayAvailableAudioRoutes = emptySet()
@@ -1270,10 +1288,14 @@ class LinkService : Service() {
             }
             "SYNC_CONTACTS" -> sendContacts()
             "AUDIO_QUERY" -> gatewayAudioStatus()
-            "AUDIO_MODE" -> gatewaySetVolumeMode(arg1, p.getOrNull(2).orEmpty())
-            "AUDIO_VOLUME" -> gatewaySetAudioVolume(arg1, p.getOrNull(2).orEmpty())
-            "AUDIO_STEP" -> gatewayAudioStep(arg1, p.getOrNull(2).orEmpty())
-            "AUDIO_ROUTE" -> gatewaySetAudioRoute(arg1, p.getOrNull(2).orEmpty())
+            "AUDIO_MODE" -> if (gatewayAudioCommandAllowed(p.getOrNull(3), "MODE",
+                    p.getOrNull(2).orEmpty())) gatewaySetVolumeMode(arg1, p.getOrNull(2).orEmpty())
+            "AUDIO_VOLUME" -> if (gatewayAudioCommandAllowed(p.getOrNull(3), "VOLUME",
+                    p.getOrNull(2).orEmpty())) gatewaySetAudioVolume(arg1, p.getOrNull(2).orEmpty())
+            "AUDIO_STEP" -> if (gatewayAudioCommandAllowed(p.getOrNull(3), "STEP",
+                    p.getOrNull(2).orEmpty())) gatewayAudioStep(arg1, p.getOrNull(2).orEmpty())
+            "AUDIO_ROUTE" -> if (gatewayAudioCommandAllowed(p.getOrNull(3), "ROUTE",
+                    p.getOrNull(2).orEmpty())) gatewaySetAudioRoute(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_RESULT" -> {
                 val id = p.getOrNull(3).orEmpty()
                 val outcome = p.getOrNull(2).orEmpty()
@@ -1284,6 +1306,8 @@ class LinkService : Service() {
                 val timeout = pendingAudioRequests.remove(id)
                 if (timeout != null) {
                     audioTimeoutHandler.removeCallbacks(timeout)
+                    gatewayAudioError = if (outcome in setOf("APPLIED")) null
+                        else "Gateway $arg1: $outcome"
                     Hub.log("Gateway audio result: ${arg1} — $outcome")
                 } else {
                     Hub.log("Ignoring stale audio acknowledgement")
