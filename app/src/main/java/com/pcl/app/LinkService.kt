@@ -831,24 +831,24 @@ class LinkService : Service() {
         writer = w
         try {
             val peer = try {
-            s.remoteDevice.name ?: s.remoteDevice.address
-        } catch (e: Exception) {
-            "peer"
-        }
-        setConn(true, "Connected to $peer")
-        helloReceived = false
-        peerProtocol = null
-        peerAppVersion = ""
-        clearPendingCall()
-        // The Gateway's first CALL after a fresh Remote session is a snapshot,
-        // not evidence of a newly started ringing or outgoing call. This also
-        // protects process recreation where no disconnect callback ran.
-        if (role == ROLE_REMOTE) CallHistory.onLinkLost()
-        send("HELLO", role, Protocol.VERSION.toString(), appVersion)
-        if (role == ROLE_GATEWAY) {
-            sendCallState()
-            sendContactsFingerprint()
-        }
+                s.remoteDevice.name ?: s.remoteDevice.address
+            } catch (e: Exception) {
+                "peer"
+            }
+            setConn(true, "Connected to $peer")
+            helloReceived = false
+            peerProtocol = null
+            peerAppVersion = ""
+            clearPendingCall()
+            // The Gateway's first CALL after a fresh Remote session is a snapshot,
+            // not evidence of a newly started ringing or outgoing call. This also
+            // protects process recreation where no disconnect callback ran.
+            if (role == ROLE_REMOTE) CallHistory.onLinkLost()
+            send("HELLO", role, Protocol.VERSION.toString(), appVersion)
+            if (role == ROLE_GATEWAY) {
+                sendCallState()
+                sendContactsFingerprint()
+            }
             val input = DataInputStream(BufferedInputStream(s.inputStream, 16384))
             while (alive(gen)) {
                 val type = input.readUnsignedByte()
