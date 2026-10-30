@@ -72,6 +72,14 @@ Android only lets the phone's own dialer send keypad tones into a call, so PCL c
 
 The Remote needs no internet: other-app calls run on the Gateway with the Gateway's mobile data. The Remote only needs internet (Wi-Fi, for example) to download PCL updates; otherwise install the new APK on it by hand.
 
+## Remote control of Gateway call audio
+
+- In **Calls → active call**, the Remote can adjust the Gateway's reported volume and request **Earpiece**, **Speaker** or **Bluetooth**. Only call-capable audio endpoints detected on the Gateway are offered; Bluetooth media-only A2DP speakers are not call endpoints.
+- **AUTO** selects Gateway voice-call volume while a call is active. Select **CALL** explicitly for voice volume; **MEDIA** and **RING** change different Android audio streams.
+- The volume slider transmits a single request when you release it, rather than flooding the Bluetooth connection. Gateway responses report the actual level and audio route, including when Android refuses to apply a request.
+- The Bluetooth output option refers to a **hands-free headset paired to the Gateway**, not the PCL Remote phone. PCL transports control commands over Bluetooth, **not call audio**.
+- Android grants priority for cellular-call audio routing to the native phone application. On some devices, PCL's `AudioManager.setCommunicationDevice` request may not override the system dialer, even when the endpoint is available. The Remote displays the detected route, never promises the audio was rerouted merely because a request was sent. For reliable cellular-call routing use the Gateway's native call screen.
+
 ## Concurrent calls and call waiting
 
 - Install the **same PCL build on both phones** (Bluetooth protocol v11). Remote Answer, Decline and Hangup now carry the exact Gateway call identifier, so delayed actions from an older call cannot control a newer call.
