@@ -1278,7 +1278,8 @@ class LinkService : Service() {
             val next = when (st) {
                 TelephonyManager.EXTRA_STATE_RINGING -> CALL_RINGING
                 TelephonyManager.EXTRA_STATE_OFFHOOK -> CALL_OFFHOOK
-                else -> CALL_IDLE
+                TelephonyManager.EXTRA_STATE_IDLE -> CALL_IDLE
+                else -> return
             }
             // A delayed RINGING broadcast must not restart ringing after a confirmed answer.
             if (next == CALL_RINGING &&
@@ -1533,7 +1534,7 @@ class LinkService : Service() {
         try {
             // Default and selected-SIM dial requests share the same call-state guard.
             // A delayed Bluetooth request must not start a second call unexpectedly.
-            if ((currentGatewayPhoneState() ?: callState) != CALL_IDLE) {
+            if (!GatewayCallCommandPolicy.allows("DIAL", currentGatewayPhoneState() ?: callState)) {
                 callControlError = "FAILED: A SIM call is already active"
                 return
             }
@@ -1578,7 +1579,7 @@ class LinkService : Service() {
     @SuppressLint("MissingPermission")
     @Suppress("DEPRECATION")
     private fun gatewayAnswer() {
-        if ((currentGatewayPhoneState() ?: callState) != CALL_RINGING) {
+        if (!GatewayCallCommandPolicy.allows("ANSWER", currentGatewayPhoneState() ?: callState)) {
             callControlError = "FAILED: No ringing SIM call to answer"
             return
         }
@@ -1600,11 +1601,11 @@ class LinkService : Service() {
     @Suppress("DEPRECATION")
     private fun gatewayEnd(rejectRinging: Boolean = false) {
         val observed = currentGatewayPhoneState() ?: callState
-        if (rejectRinging && observed != CALL_RINGING) {
+        if (rejectRinging && !GatewayCallCommandPolicy.allows("REJECT", observed)) {
             callControlError = "FAILED: No ringing SIM call to reject"
             return
         }
-        if (!rejectRinging && observed != CALL_OFFHOOK) {
+        if (!rejectRinging && !GatewayCallCommandPolicy.allows("HANGUP", observed)) {
             callControlError = "FAILED: No connected SIM call to hang up"
             return
         }
