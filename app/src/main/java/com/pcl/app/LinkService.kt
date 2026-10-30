@@ -1561,11 +1561,23 @@ class LinkService : Service() {
                 }
                 extras.putParcelable(TelecomManager.EXTRA_PHONE_ACCOUNT_HANDLE, handle)
             }
+            val previousNumber = callNumber
+            val previousName = callName
+            val previousDirection = callDirection
             callNumber = n
-            callName = lookupName(n)
+            // Contact and SIM provider lookups must not block the Bluetooth reader.
+            // Once the call starts, refreshPhoneDetails() fills in the contact name.
+            callName = ""
             callDirection = "OUTGOING"
-            getSystemService(TelecomManager::class.java)!!
-                .placeCall(Uri.fromParts("tel", n, null), extras)
+            try {
+                getSystemService(TelecomManager::class.java)!!
+                    .placeCall(Uri.fromParts("tel", n, null), extras)
+            } catch (e: Exception) {
+                callNumber = previousNumber
+                callName = previousName
+                callDirection = previousDirection
+                throw e
+            }
             callControlError = null
             Hub.log("Dialing ${logCaller(n)}")
         } catch (e: Exception) {
@@ -1710,6 +1722,7 @@ class LinkService : Service() {
     private fun showOngoingCall() {
         // Reuse the incoming-call notification ID so the Remote has one call notification,
         // updated in place when the Gateway call is answered or connects.
+        val connectedAt = CallHistory.connectedSince
         val n = Notification.Builder(this, CH_CALLS)
             .setSmallIcon(android.R.drawable.sym_action_call)
             .setContentTitle("Call in progress")
@@ -1717,8 +1730,10 @@ class LinkService : Service() {
             .setSubText("on the Gateway")
             .setCategory(Notification.CATEGORY_CALL)
             .setOngoing(true)
-            .setUsesChronometer(CallHistory.connectedSince > 0)
-            .setWhen(System.currentTimeMillis() - (SystemClock.elapsedRealtime() - CallHistory.connectedSince).coerceAtLeast(0))
+            .setUsesChronometer(connectedAt > 0L)
+            .setWhen(if (connectedAt > 0L) System.currentTimeMillis() -
+                (SystemClock.elapsedRealtime() - connectedAt).coerceAtLeast(0L)
+                else System.currentTimeMillis())
             .setContentIntent(openCallsPi())
             .addAction(action(android.R.drawable.ic_media_previous, "Volume −", actionPi(ACTION_AUDIO_DOWN, 31)))
             .addAction(action(android.R.drawable.ic_media_next, "Volume +", actionPi(ACTION_AUDIO_UP, 32)))
