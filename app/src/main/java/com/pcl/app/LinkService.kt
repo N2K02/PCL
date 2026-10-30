@@ -591,10 +591,7 @@ class LinkService : Service() {
         if (role == ROLE_GATEWAY) {
             gatewayDial(number)
         } else {
-            if (requestGateway("DIAL", number)) {
-                CallHistory.onDialRequested(number, name)
-                simDialAt = SystemClock.elapsedRealtime()
-            }
+            requestGateway("DIAL", number, displayName = name)
         }
     }
 
@@ -614,10 +611,7 @@ class LinkService : Service() {
             callControlError = "FAILED: Selected SIM does not have a verified voice account"
             Hub.notifyUi()
         } else {
-            if (requestGateway("DIAL_SIM", number, slot)) {
-                CallHistory.onDialRequested(number, name)
-                simDialAt = SystemClock.elapsedRealtime()
-            }
+            requestGateway("DIAL_SIM", number, slot, displayName = name)
         }
     }
 
@@ -633,7 +627,7 @@ class LinkService : Service() {
         }
     }
 
-    private fun requestGateway(command: String, argument: String = "", selectedSlot: Int? = null): Boolean {
+    private fun requestGateway(command: String, argument: String = "", selectedSlot: Int? = null, displayName: String = ""): Boolean {
         if (!connected || !helloReceived || peerProtocol != Protocol.VERSION) {
             callControlError = "FAILED: Connect two phones running the same PCL version"
             Hub.notifyUi()
@@ -660,6 +654,10 @@ class LinkService : Service() {
         // before answer()/reject() returns on the UI thread.
         pendingAnswer = command == "ANSWER"
         pendingReject = command == "REJECT"
+        if (command in setOf("DIAL", "DIAL_SIM")) {
+            CallHistory.onDialRequested(argument, displayName)
+            simDialAt = SystemClock.elapsedRealtime()
+        }
         callControlError = "PENDING: Waiting for Gateway confirmation"
         when (command) {
             "DIAL" -> send(command, argument, request.toString())
@@ -694,6 +692,7 @@ class LinkService : Service() {
     private fun confirmCallState() {
         val confirmed = CallControlProtocol.stateConfirmed(pendingCallCommand, callState)
         if (confirmed && pendingCallAccepted) {
+            if (pendingCallCommand in setOf("DIAL", "DIAL_SIM")) simDialAt = 0L
             pendingCallCommand = null
             pendingCallAccepted = false
             pendingDeclineRecord = null
@@ -1102,6 +1101,15 @@ class LinkService : Service() {
                     Hub.log("Gateway call control failed: $detail")
                 } else {
                     pendingCallAccepted = true
+                    // The CALL state may reach the Remote before its correlated ACK.
+                    // Claim ownership only once both conditions are true.
+                    if (callState == CALL_OFFHOOK && (pendingAnswer ||
+                        (pendingCallCommand in setOf("DIAL", "DIAL_SIM") && simDialAt > 0L &&
+                            SystemClock.elapsedRealtime() - simDialAt < DIAL_WINDOW_MS))) {
+                        simCallHere = true
+                        simCallOnGateway = false
+                        showOngoingCall()
+                    }
                     if (pendingReject) {
                         if (callState == CALL_RINGING) CallHistory.onDeclinedHere()
                         else pendingDeclineRecord?.let { CallHistory.confirmDeclined(it) }
@@ -1668,13 +1676,15 @@ class LinkService : Service() {
             }
             CALL_OFFHOOK -> {
                 stopSimRinging()
-                if (pendingAnswer) simCallHere = true
+                if (pendingAnswer && pendingCallAccepted) simCallHere = true
                 if (previous == CALL_IDLE) {
-                    simCallHere = simCallHere || (simDialAt > 0L &&
+                    simCallHere = simCallHere || (pendingCallAccepted &&
+                        pendingCallCommand in setOf("DIAL", "DIAL_SIM") &&
+                        simDialAt > 0L &&
                         SystemClock.elapsedRealtime() - simDialAt < DIAL_WINDOW_MS)
                 }
-                // Ownership belongs to exactly one call, not the entire 60-second window.
-                simDialAt = 0L
+                // The dial marker is cleared by confirmed ACK+OFFHOOK, failure,
+                // call end or disconnect; not by an unrelated OFFHOOK event.
                 if (simCallHere) {
                     simCallOnGateway = false
                     showOngoingCall()
