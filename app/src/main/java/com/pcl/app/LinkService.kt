@@ -350,9 +350,9 @@ class LinkService : Service() {
             send("AUDIO_RESULT", "ROUTE", "ERROR", requestId)
             return
         }
-        val active = callState == CALL_OFFHOOK ||
-            audio.mode == AudioManager.MODE_IN_CALL ||
-            audio.mode == AudioManager.MODE_IN_COMMUNICATION
+        // MODE_IN_COMMUNICATION may describe an unrelated VoIP call. Only
+        // target a verified live cellular call, never a third-party audio session.
+        val active = callState == CALL_OFFHOOK && currentGatewayPhoneState() == CALL_OFFHOOK
         if (!active || callControlsRestricted) {
             Hub.log("Gateway audio route not applied: no unambiguous connected SIM call")
             send("AUDIO_RESULT", "ROUTE", "NO_CALL", requestId)
@@ -617,15 +617,19 @@ class LinkService : Service() {
                     }
                 } else Hub.log("Ignored stale notification action for a different SIM call")
             }
-            ACTION_AUDIO_DOWN, ACTION_AUDIO_UP -> if (running && role == ROLE_REMOTE && connected) {
-                val delta = if (intent.action == ACTION_AUDIO_UP) 1 else -1
-                Hub.log("Remote audio step: $delta")
-                sendAudioRequest("AUDIO_STEP", delta.toString())
+            ACTION_AUDIO_DOWN, ACTION_AUDIO_UP -> {
+                if (running && connected && validNotificationCallAction(intent)) {
+                    val delta = if (intent.action == ACTION_AUDIO_UP) 1 else -1
+                    Hub.log("Remote audio step: $delta")
+                    sendAudioRequest("AUDIO_STEP", delta.toString())
+                } else Hub.log("Ignored stale notification volume action")
             }
-            ACTION_AUDIO_SPEAKER -> if (running && role == ROLE_REMOTE && connected) {
-                val target = if (gatewayAudioRoute == "SPEAKER") "EARPIECE" else "SPEAKER"
-                Hub.log("Remote audio route: $target")
-                requestGatewayRoute(target)
+            ACTION_AUDIO_SPEAKER -> {
+                if (running && connected && validNotificationCallAction(intent)) {
+                    val target = if (gatewayAudioRoute == "SPEAKER") "EARPIECE" else "SPEAKER"
+                    Hub.log("Remote audio route: $target")
+                    requestGatewayRoute(target)
+                } else Hub.log("Ignored stale notification audio route action")
             }
             ACTION_CALL_BACK -> {
                 nm.cancel(ID_MISSED)
@@ -685,7 +689,8 @@ class LinkService : Service() {
         return role == ROLE_REMOTE && token > 0L && activeCallToken == token &&
             !callControlsRestricted && when (action) {
                 ACTION_ANSWER, ACTION_REJECT -> callState == CALL_RINGING
-                ACTION_HANGUP -> callState == CALL_OFFHOOK
+                ACTION_HANGUP, ACTION_AUDIO_DOWN, ACTION_AUDIO_UP, ACTION_AUDIO_SPEAKER ->
+                    callState == CALL_OFFHOOK
                 else -> false
             }
     }
@@ -1159,7 +1164,10 @@ class LinkService : Service() {
                     Hub.log("Incompatible protocol; call commands disabled until both phones update")
                     return
                 }
-                if (role == ROLE_GATEWAY) sendPendingSimEnrichment()
+                if (role == ROLE_GATEWAY) {
+                    sendPendingSimEnrichment()
+                    gatewayAudioStatus()
+                }
             }
             // gateway -> remote
             "CALL" -> {
@@ -1190,10 +1198,9 @@ class LinkService : Service() {
                     if (callNumber.isBlank() && CallerId.isPrivate(receivedName))
                         CallerId.PRIVATE else ""
                 }
-                if (callNumber.isBlank() && callName.isNotBlank() &&
-                    !CallerId.isPrivate(callName)) {
-                    callNumber = resolveUniqueContactNumber(callName)
-                }
+                // Don't read the entire contacts provider on the Bluetooth socket
+                // reader or infer a dialable number from a name-only CALL packet.
+                // The Gateway can supply verified numbers asynchronously.
                 callDirection = p.getOrElse(4) { "" }
                 val slot = p.getOrNull(5)?.toIntOrNull()?.takeIf { it in 0..3 }
                 callSimIdentity = slot?.let {
