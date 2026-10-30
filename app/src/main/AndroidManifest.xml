@@ -7,6 +7,9 @@
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <!-- Optional post-call SIM enrichment. This is hard-restricted on modern Android;
+         a compatible installer must allowlist it. No core calling feature depends on it. -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.ANSWER_PHONE_CALLS" />
     <uses-permission android:name="android.permission.CALL_PHONE" />
@@ -19,42 +22,30 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
     <uses-feature android:name="android.hardware.telephony" android:required="false" />
-    <queries>
-        <intent>
-            <action android:name="android.intent.action.MAIN" />
-            <category android:name="android.intent.category.LAUNCHER" />
-        </intent>
-        <!-- Gateway: starts WhatsApp calls the Remote asks for -->
-        <package android:name="com.whatsapp" />
-        <package android:name="com.whatsapp.w4b" />
-    </queries>
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_pcl"
         android:label="PCL"
         android:theme="@style/Theme.PCL">
+        <provider android:name="com.pcl.app.CrashJournalProvider" android:authorities="${applicationId}.crashjournal" android:exported="false" android:initOrder="100" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
-            android:showWhenLocked="true"
-            android:turnScreenOn="true"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <!-- Gateway: invisible step that wakes the screen and opens WhatsApp for a call -->
+        <!-- Only the restricted incoming-call surface can appear above the lock screen. -->
         <activity
-            android:name=".WhatsAppCallActivity"
-            android:excludeFromRecents="true"
+            android:name=".IncomingCallActivity"
             android:exported="false"
-            android:noHistory="true"
             android:showWhenLocked="true"
-            android:taskAffinity=""
-            android:theme="@android:style/Theme.Translucent.NoTitleBar"
-            android:turnScreenOn="true" />
+            android:turnScreenOn="true"
+            android:launchMode="singleTop" />
         <service
             android:name=".LinkService"
             android:exported="false"
@@ -72,26 +63,5 @@
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
-        <service
-            android:name=".WhatsappCallAccessibilityService"
-            android:label="@string/accessibility_label"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/whatsapp_call_accessibility" />
-        </service>
-        <service
-            android:name=".NotifListener"
-            android:exported="true"
-            android:label="PCL notification sync"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
-        </service>
     </application>
 </manifest>

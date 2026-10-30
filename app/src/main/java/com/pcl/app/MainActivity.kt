@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Article
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.CheckCircle
@@ -36,6 +37,8 @@ import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Hub
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Radio
@@ -56,7 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private enum class MainTab { HOME, CALLS, UPDATE, SETTINGS }
+private enum class MainTab { HOME, CALLS, UPDATE, SETTINGS, LOGS }
 
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
@@ -80,8 +83,8 @@ class MainActivity : ComponentActivity() {
         }
         prefs = Prefs.of(this)
         role = prefs.getString(Prefs.ROLE, LinkService.ROLE_GATEWAY) ?: LinkService.ROLE_GATEWAY
-        roleSelected = true
-        if (!prefs.contains(Prefs.ROLE)) prefs.edit().putString(Prefs.ROLE, LinkService.ROLE_GATEWAY).apply()
+        // Do not silently assign the SIM-carrying Gateway role on first launch.
+        roleSelected = prefs.contains(Prefs.ROLE)
         selectedDevice = prefs.getString(Prefs.PEER_DEVICE, null)
         CallLogger.init(this)
         CallHistory.init(this)
@@ -233,18 +236,15 @@ class MainActivity : ComponentActivity() {
         val remote = activeRole == LinkService.ROLE_REMOTE
         val connected = running && service?.connected == true
         val callState = service?.callState ?: LinkService.CALL_IDLE
-        val notificationAccess = NotifListener.isEnabled(this)
-        val setupReady = remember(revision, role, roleSelected, notificationAccess) {
+        val setupReady = remember(revision, role, roleSelected) {
             val required = corePerms() + if (role == LinkService.ROLE_GATEWAY) gatewayPerms() else emptyList()
-            // Only the Gateway reads notifications; the Remote has no WhatsApp to watch.
-            roleSelected && required.distinct().all { granted(it) } &&
-                (role != LinkService.ROLE_GATEWAY || notificationAccess)
+            roleSelected && required.distinct().all { granted(it) }
         }
         var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
         var showingPermissions by remember { mutableStateOf(false) }
         BackHandler(enabled = showingPermissions && screen == MainTab.SETTINGS) { showingPermissions = false }
-        BackHandler(enabled = screen == MainTab.UPDATE || screen == MainTab.CALLS) {
-            screen = if (screen == MainTab.UPDATE) MainTab.SETTINGS else MainTab.HOME
+        BackHandler(enabled = screen == MainTab.UPDATE || screen == MainTab.CALLS || screen == MainTab.LOGS) {
+            screen = if (screen == MainTab.CALLS) MainTab.HOME else MainTab.SETTINGS
         }
         val updateStatus by LiveUpdater.controller.status.collectAsState()
         val unseenMissed by CallHistory.unseenMissed.collectAsState()
@@ -268,6 +268,7 @@ class MainActivity : ComponentActivity() {
                                     MainTab.HOME -> Icons.Default.Hub
                                     MainTab.CALLS -> Icons.Default.Call
                                     MainTab.UPDATE -> Icons.Default.Download
+                                    MainTab.LOGS -> Icons.Rounded.Article
                                     MainTab.SETTINGS -> if (showingPermissions) Icons.Default.CheckCircle else Icons.Default.Settings
                                 },
                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
@@ -277,6 +278,7 @@ class MainActivity : ComponentActivity() {
                                 MainTab.HOME -> "Home"
                                 MainTab.CALLS -> "Calls"
                                 MainTab.UPDATE -> "About & updates"
+                                MainTab.LOGS -> "Logs"
                                 MainTab.SETTINGS -> if (showingPermissions) "Permissions" else "Settings"
                             }, fontWeight = FontWeight.SemiBold, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
@@ -313,26 +315,33 @@ class MainActivity : ComponentActivity() {
                         callDisplay = service?.display().orEmpty(),
                         simStatus = service?.callControlError,
                         simOnGateway = service?.simCallOnGateway == true,
-                        whatsappStatus = service?.whatsappCallStatus,
-                        mirrorCall = service?.liveMirrorCall,
+                        controlsRestricted = service?.callControlsRestricted == true,
                         contacts = contacts,
                         gatewayVolume = service?.gatewayVolume ?: 0,
                         gatewayMaxVolume = service?.gatewayMaxVolume ?: 1,
                         gatewayAudioRoute = service?.gatewayAudioRoute ?: "UNKNOWN",
+                        gatewayAudioError = service?.gatewayAudioError,
+                        gatewayVolumeMode = service?.gatewayVolumeMode ?: "AUTO",
+                        gatewayAvailableAudioRoutes = service?.gatewayAvailableAudioRoutes.orEmpty(),
+                        availableSimSlots = service?.availableSimSlots.orEmpty(),
                     ),
                     actions = CallsActions(
                         simCall = { number, name -> service?.dial(number, name) },
-                        whatsappCall = { number, name -> service?.startWhatsAppCall(number, name) },
+                        simCallFromSlot = { number, name, slot -> service?.dialWithSim(number, name, slot) },
                         answer = { service?.answer() },
                         reject = { service?.reject() },
                         hangUp = { service?.hangUp() },
-                        pressMirror = { call, index, label -> service?.pressMirrorButton(call.key, index, label, call.pkg) },
                         syncContacts = { service?.syncContacts(); refresh() },
                         setGatewayVolume = { service?.requestGatewayVolume(it) },
+                        setGatewayVolumeMode = { service?.requestGatewayVolumeMode(it) },
                         setGatewayRoute = { service?.requestGatewayRoute(it) },
                         refreshGatewayAudio = { service?.refreshGatewayAudio() },
                     ),
                     modifier = Modifier.padding(insets),
+                )
+            } else if (screen == MainTab.LOGS) {
+                PCLLogsPage(
+                    modifier = Modifier.fillMaxSize().padding(insets),
                 )
             } else Column(
                 Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState())
@@ -494,6 +503,37 @@ class MainActivity : ComponentActivity() {
                             modifier = Modifier.clickable { if (setupReady) screen = MainTab.CALLS },
                         )
                     }
+                    if (!remote) ListItem(
+                        headlineContent = { Text("Call history (optional)") },
+                        supportingContent = { Text(if (granted(Manifest.permission.READ_CALL_LOG))
+                            "Verified SIM call history enrichment enabled" else
+                            "Optional SIM metadata: restricted READ_CALL_LOG requires installer allowlisting; normal calls work without it") },
+                        leadingContent = { Icon(Icons.Default.History, null) },
+                        modifier = Modifier.clickable {
+                            if (!granted(Manifest.permission.READ_CALL_LOG))
+                                requestPermissions(arrayOf(Manifest.permission.READ_CALL_LOG), 91)
+                        },
+                    )
+                    if (Build.VERSION.SDK_INT >= 34 &&
+                        !getSystemService(android.app.NotificationManager::class.java).canUseFullScreenIntent()) {
+                        ListItem(
+                            headlineContent = { Text("Incoming call pop-ups") },
+                            supportingContent = { Text("Enable full-screen alerts for calls while the Remote is locked") },
+                            leadingContent = { Icon(Icons.Default.Call, null) },
+                            modifier = Modifier.clickable {
+                                runCatching {
+                                    startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                                        android.net.Uri.parse("package:$packageName")))
+                                }
+                            },
+                        )
+                    }
+                    ListItem(
+                        headlineContent = { Text("Logs") },
+                        supportingContent = { Text("Persistent diagnostics and crash reports") },
+                        leadingContent = { Icon(Icons.Rounded.Article, contentDescription = null) },
+                        modifier = Modifier.clickable { screen = MainTab.LOGS },
+                    )
                     HorizontalDivider()
                     ListItem(
                         headlineContent = { Text("About & updates") },
@@ -530,6 +570,11 @@ class MainActivity : ComponentActivity() {
                         if (callState == LinkService.CALL_RINGING || callState == LinkService.CALL_OFFHOOK) {
                             Text(service?.display().orEmpty(), style = MaterialTheme.typography.bodyLarge)
                         }
+                        if (service?.callControlsRestricted == true) {
+                            Text("Call waiting or multiple SIM calls detected. Answer, decline and end calls directly on the Gateway.",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodyMedium)
+                        }
                         if (remote && service?.simCallOnGateway == true) {
                             Text("Taken on the Gateway, so this phone stays quiet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
@@ -548,15 +593,18 @@ class MainActivity : ComponentActivity() {
                         }
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                             if (callState == LinkService.CALL_RINGING) {
-                                Button(onClick = { service?.answer() }, modifier = Modifier.weight(1f)) {
+                                Button(onClick = { service?.answer() }, enabled = service?.callControlsRestricted != true,
+                                    modifier = Modifier.weight(1f)) {
                                     Icon(Icons.Default.Call, null); Spacer(Modifier.width(6.dp)); Text("Answer")
                                 }
-                                OutlinedButton(onClick = { service?.reject() }, modifier = Modifier.weight(1f)) {
+                                OutlinedButton(onClick = { service?.reject() }, enabled = service?.callControlsRestricted != true,
+                                    modifier = Modifier.weight(1f)) {
                                     Icon(Icons.Default.Close, null); Spacer(Modifier.width(6.dp)); Text("Reject")
                                 }
                             }
                             if (callState == LinkService.CALL_OFFHOOK) {
-                                Button(onClick = { service?.hangUp() }, modifier = Modifier.fillMaxWidth(),
+                                Button(onClick = { service?.hangUp() }, enabled = service?.callControlsRestricted != true,
+                                    modifier = Modifier.fillMaxWidth(),
                                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) {
                                     Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(8.dp)); Text("Hang up")
                                 }
@@ -572,7 +620,6 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                if (screen == MainTab.HOME && setupReady) ActivityLogCard()
                 if (screen == MainTab.HOME && !setupReady) {
                     Text("Complete setup first", style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
                     SectionCard(title = "Home locked", subtitle = "Grant the required permissions in Settings to enable the connection controls.") {
@@ -596,12 +643,6 @@ class MainActivity : ComponentActivity() {
                             PermissionSetupRow("Answer calls", "Allow call answering requests", granted(Manifest.permission.ANSWER_PHONE_CALLS)) { requestPermissions(arrayOf(Manifest.permission.ANSWER_PHONE_CALLS), 1) }
                             PermissionSetupRow("Place calls", "Place calls through the gateway SIM", granted(Manifest.permission.CALL_PHONE)) { requestPermissions(arrayOf(Manifest.permission.CALL_PHONE), 1) }
                             PermissionSetupRow("Contacts (for sync)", "Send Gateway contacts to the Remote and resolve caller names", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
-                            PermissionSetupRow("Notification access", "Send notifications and WhatsApp calls to the Remote", notificationAccess, actionLabel = "Open settings") { runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }.onFailure { toast("Open Android Settings → Notifications → Notification access") } }
-                            val callHelperEnabled = WhatsappCallAccessibilityService.isEnabled(this@MainActivity)
-                            PermissionSetupRow("WhatsApp calls (optional)", "Accessibility service \"PCL WhatsApp call helper\": lets PCL start the WhatsApp calls the Remote asks for", callHelperEnabled, actionLabel = "Open settings") {
-                                runCatching { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-                                    .onFailure { toast("Open Android Settings → Accessibility → Installed apps → PCL WhatsApp call helper") }
-                            }
                             if (Build.VERSION.SDK_INT >= 31) PermissionSetupRow("Bluetooth connection", "Connect to the paired remote phone", granted(Manifest.permission.BLUETOOTH_CONNECT)) { requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 1) }
                         } else if (roleSelected) {
                             PermissionSetupRow("Local contacts (optional)", "Include this phone's contacts in Remote search", granted(Manifest.permission.READ_CONTACTS)) { requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 1) }
@@ -610,23 +651,7 @@ class MainActivity : ComponentActivity() {
                         } else {
                             Text("Choose Gateway or Remote above to load the matching permission checklist.")
                         }
-                        // Android 13+ blocks these two for apps installed from an APK file
-                        // until the user allows "restricted settings" in App info.
-                        // Only the Gateway needs them; the Remote has neither.
-                        if (roleSelected && role == LinkService.ROLE_GATEWAY && Build.VERSION.SDK_INT >= 33 &&
-                            (!notificationAccess || !WhatsappCallAccessibilityService.isEnabled(this@MainActivity))
-                        ) {
-                            Text(
-                                "Greyed out or \"Restricted setting\"? Android blocks Notification access and Accessibility for apps installed from an APK. Open App info, tap ⋮, choose Allow restricted settings, then try again.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            OutlinedButton(onClick = {
-                                runCatching {
-                                    startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.fromParts("package", packageName, null)))
-                                }.onFailure { toast("Open Android Settings → Apps → PCL") }
-                            }, modifier = Modifier.fillMaxWidth()) { Text("Open App info") }
-                        }
+
                     }
                     if (roleSelected) {
                         Card() {
@@ -639,87 +664,11 @@ class MainActivity : ComponentActivity() {
                         HorizontalDivider()
                         Text("Privacy", style = MaterialTheme.typography.titleMedium)
                         Text("PCL uses permissions for the selected phone role. Grant only the access needed for the features you want to use.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        OutlinedButton(onClick = { roleSelected = false; prefs.edit().remove(Prefs.ROLE).apply(); screen = MainTab.SETTINGS; refresh() }, modifier = Modifier.fillMaxWidth()) { Text("Reset device role") }
+                        OutlinedButton(onClick = { roleSelected = false; prefs.edit().remove(Prefs.ROLE).apply(); screen = MainTab.SETTINGS; refresh() },
+                            enabled = !running, modifier = Modifier.fillMaxWidth()) { Text(if (running) "Stop the link before resetting the role" else "Reset device role") }
                     }
                     
-                if (roleSelected && role == LinkService.ROLE_GATEWAY) {
-                    SectionCard(title = "Notification sync", subtitle = "Calls sync automatically. Other notifications are optional.") {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Notification access")
-                                Text(if (notificationAccess) "Enabled" else "Not enabled",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = if (notificationAccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                            }
-                            Icon(if (notificationAccess) Icons.Default.CheckCircle else Icons.Default.Settings,
-                                contentDescription = null,
-                                tint = if (notificationAccess) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error)
-                        }
-                        OutlinedButton(onClick = {
-                            try { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-                            catch (_: Exception) { toast("Open Settings → Notifications → Notification access, and allow PCL") }
-                        }, modifier = Modifier.fillMaxWidth()) { Text("Open notification access settings") }
-                        var mirror by remember { mutableStateOf(prefs.getBoolean(Prefs.MIRROR, false)) }
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) {
-                                Text("Send other notifications to remote")
-                                Text("Messages and other apps. Calls always go to the Remote.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                            Switch(checked = mirror, onCheckedChange = {
-                                mirror = it
-                                prefs.edit().putBoolean(Prefs.MIRROR, it).apply()
-                                if (!it) service?.clearOrdinaryMirrors()
-                            })
-                        }
-                    }
-                }
-
                     Text("PCL • Material 3 Expressive", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ActivityLogCard() {
-    val context = LocalContext.current
-    val lines by CallLogger.lines.collectAsState()
-    SectionCard(title = "Activity logs", subtitle = "Latest ${lines.size}/100 lines. Newest entries appear first.") {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
-            OutlinedButton(
-                onClick = {
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    clipboard.setPrimaryClip(ClipData.newPlainText("PCL activity logs", lines.asReversed().joinToString("\n")))
-                    CallLogger.log("Activity logs copied")
-                },
-                modifier = Modifier.weight(1f)
-            ) {
-                Icon(Icons.Default.ContentCopy, contentDescription = null)
-                Spacer(Modifier.width(5.dp))
-                Text("Copy")
-            }
-            OutlinedButton(onClick = { CallLogger.clear() }, modifier = Modifier.weight(1f)) {
-                Icon(Icons.Default.DeleteSweep, contentDescription = null)
-                Spacer(Modifier.width(5.dp))
-                Text("Clear all")
-            }
-        }
-        var expanded by remember { mutableStateOf(false) }
-        TextButton(onClick = { expanded = !expanded }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (expanded) "Hide log entries" else "Show log entries")
-        }
-        if (expanded) HorizontalDivider()
-        if (expanded && lines.isEmpty()) {
-            Text("No activity recorded yet.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        } else if (expanded) {
-            Column(
-                Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState())
-                    .background(MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.medium).padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp)
-            ) {
-                lines.asReversed().forEach { line ->
-                    Text(line, style = MaterialTheme.typography.bodySmall, fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

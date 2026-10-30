@@ -32,7 +32,6 @@ import androidx.compose.material.icons.automirrored.filled.Backspace
 import androidx.compose.material.icons.automirrored.filled.CallMade
 import androidx.compose.material.icons.automirrored.filled.CallMissed
 import androidx.compose.material.icons.automirrored.filled.CallReceived
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Close
@@ -65,6 +64,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -98,6 +99,7 @@ import java.text.Normalizer
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** What the Calls tab shows. Read from [LinkService] by MainActivity on every refresh. */
 class CallsUi(
@@ -107,27 +109,28 @@ class CallsUi(
     val simStatus: String?,
     /** The SIM call was answered or placed on the Gateway itself. */
     val simOnGateway: Boolean,
-    val whatsappStatus: String?,
-    /** A WhatsApp (or other app's) call on the Gateway that this phone shows. */
-    val mirrorCall: LinkService.MirrorCall?,
+    val controlsRestricted: Boolean = false,
     val contacts: List<Contact>,
     val gatewayVolume: Int,
     val gatewayMaxVolume: Int,
     val gatewayAudioRoute: String,
+    val gatewayAudioError: String? = null,
+    val gatewayVolumeMode: String,
+    val gatewayAvailableAudioRoutes: Set<String> = emptySet(),
+    val availableSimSlots: Set<Int> = emptySet(),
 )
 
 class CallsActions(
     val simCall: (number: String, name: String) -> Unit,
-    val whatsappCall: (number: String, name: String) -> Unit,
     val answer: () -> Unit,
     val reject: () -> Unit,
     val hangUp: () -> Unit,
-    /** Press one of a Gateway app call's buttons: its index on the Gateway and its label. */
-    val pressMirror: (call: LinkService.MirrorCall, index: Int, label: String) -> Unit,
     val syncContacts: () -> Unit,
     val setGatewayVolume: (Int) -> Unit,
+    val setGatewayVolumeMode: (String) -> Unit,
     val setGatewayRoute: (String) -> Unit,
     val refreshGatewayAudio: () -> Unit,
+    val simCallFromSlot: (number: String, name: String, slot: Int) -> Unit = { _, _, _ -> },
 )
 
 private enum class CallsSection(val label: String, val icon: ImageVector) {
@@ -158,12 +161,8 @@ fun CallsScreen(ui: CallsUi, actions: CallsActions, modifier: Modifier = Modifie
     val edit: (String) -> Unit = { n -> number = n; section = CallsSection.KEYPAD }
 
     Column(modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        val mirror = ui.mirrorCall
         if (ui.callState != LinkService.CALL_IDLE) {
             ActiveCallCard(ui, actions)
-            Spacer(Modifier.height(10.dp))
-        } else if (mirror != null) {
-            AppCallCard(mirror, ui, actions)
             Spacer(Modifier.height(10.dp))
         } else if (!ui.connected) {
             Text(
@@ -240,6 +239,11 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     Text(ui.callDisplay, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 }
             }
+            if (ui.controlsRestricted) {
+                Text("Concurrent SIM calls or call waiting: use the Gateway phone for Answer, Decline or Hangup.",
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium)
+            }
             if (ui.connected) {
                 LaunchedEffect(ui.callState) {
                     while (true) {
@@ -247,23 +251,86 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                         delay(3000)
                     }
                 }
-                Text("Gateway volume: " + ui.gatewayVolume + " / " + ui.gatewayMaxVolume)
-                Slider(value = ui.gatewayVolume.coerceIn(0, ui.gatewayMaxVolume).toFloat(),
-                    onValueChange = { actions.setGatewayVolume(it.toInt()) },
+                Text("Gateway volume mode")
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("AUTO" to "Auto", "CALL" to "Call", "MEDIA" to "Media", "RING" to "Ringtone")
+                        .forEach { (mode, label) ->
+                            FilterChip(
+                                selected = ui.gatewayVolumeMode == mode,
+                                onClick = { actions.setGatewayVolumeMode(mode) },
+                                label = { Text(label) },
+                            )
+                        }
+                }
+                // Keep the Remote thumb optimistic until the Gateway confirms its
+                // real level, fails the request, or the command timeout expires.
+                // Intermediate AUDIO_STATUS snapshots must not jerk it backward.
+                var localVolume by remember(ui.callState) {
+                    mutableStateOf(ui.gatewayVolume.toFloat())
+                }
+                var isDraggingVolume by remember(ui.callState) { mutableStateOf(false) }
+                var pendingVolume by remember(ui.callState) { mutableStateOf<Int?>(null) }
+                LaunchedEffect(ui.gatewayVolume, pendingVolume) {
+                    if (pendingVolume == ui.gatewayVolume) pendingVolume = null
+                }
+                LaunchedEffect(ui.gatewayVolume, ui.gatewayMaxVolume, pendingVolume,
+                    isDraggingVolume) {
+                    if (!isDraggingVolume && pendingVolume == null)
+                        localVolume = ui.gatewayVolume.toFloat()
+                }
+                LaunchedEffect(pendingVolume) {
+                    if (pendingVolume != null) {
+                        delay(5_500L)
+                        pendingVolume = null
+                    }
+                }
+                LaunchedEffect(ui.gatewayAudioError) {
+                    if (ui.gatewayAudioError != null) pendingVolume = null
+                }
+                val visibleVolume = localVolume.roundToInt()
+                    .coerceIn(0, ui.gatewayMaxVolume.coerceAtLeast(1))
+                Text("Gateway volume: $visibleVolume / ${ui.gatewayMaxVolume}" +
+                    if (pendingVolume != null) " · applying…" else "")
+                Slider(
+                    value = localVolume.coerceIn(0f, ui.gatewayMaxVolume.coerceAtLeast(1).toFloat()),
+                    onValueChange = {
+                        pendingVolume = null
+                        localVolume = it
+                        isDraggingVolume = true
+                    },
+                    onValueChangeFinished = {
+                        val target = localVolume.roundToInt()
+                        pendingVolume = target
+                        isDraggingVolume = false
+                        actions.setGatewayVolume(target)
+                    },
                     valueRange = 0f..ui.gatewayMaxVolume.coerceAtLeast(1).toFloat(),
-                    steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0))
+                    steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0),
+                    enabled = !ui.controlsRestricted,
+                )
                 Text("SIM audio output: " + ui.gatewayAudioRoute)
+                ui.gatewayAudioError?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { actions.setGatewayRoute("EARPIECE") },
-                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Earpiece") }
-                    OutlinedButton(onClick = { actions.setGatewayRoute("SPEAKER") },
-                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Speaker") }
+                    listOf("EARPIECE" to "Earpiece", "SPEAKER" to "Speaker",
+                        "BLUETOOTH" to "Bluetooth").forEach { (route, label) ->
+                        OutlinedButton(
+                            onClick = { actions.setGatewayRoute(route) },
+                            enabled = ui.callState == LinkService.CALL_OFFHOOK &&
+                                !ui.controlsRestricted &&
+                                route in ui.gatewayAvailableAudioRoutes &&
+                                ui.gatewayAudioRoute != route,
+                        ) { Text(label) }
+                    }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
                 if (ringing) {
                     FilledTonalButton(
                         onClick = actions.reject,
+                        enabled = !ui.controlsRestricted,
                         colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError,
@@ -272,6 +339,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                     ) { Icon(Icons.Default.CallEnd, null); Spacer(Modifier.width(6.dp)); Text("Decline") }
                     FilledTonalButton(
                         onClick = actions.answer,
+                        enabled = !ui.controlsRestricted,
                         colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
                             containerColor = CallGreen, contentColor = Color.White,
                         ),
@@ -280,6 +348,7 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                 } else {
                     FilledTonalButton(
                         onClick = actions.hangUp,
+                        enabled = !ui.controlsRestricted,
                         colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
                             containerColor = MaterialTheme.colorScheme.error,
                             contentColor = MaterialTheme.colorScheme.onError,
@@ -290,100 +359,6 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
             }
             Text(
                 "Talk through the Gateway or its Bluetooth headset.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
-    }
-}
-
-/** A WhatsApp (or other app's) call on the Gateway, with that call's own buttons. */
-@Composable
-private fun AppCallCard(call: LinkService.MirrorCall, ui: CallsUi, actions: CallsActions) {
-    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    LaunchedEffect(call.connectedAt) {
-        while (call.connectedAt != null) {
-            now = System.currentTimeMillis()
-            delay(1_000)
-        }
-    }
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = if (call.ringing) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer,
-        ),
-        modifier = Modifier.fillMaxWidth(),
-    ) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.AutoMirrored.Filled.Chat, null, Modifier.size(28.dp))
-                Spacer(Modifier.width(12.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        when {
-                            call.ringing -> "Incoming ${call.app} call"
-                            call.connectedAt != null -> "${call.app} call · ${duration(((now - call.connectedAt) / 1000).coerceAtLeast(0))}"
-                            else -> "${call.app} call"
-                        },
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(call.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            if (call.buttons.isNotEmpty()) {
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                    call.buttons.forEach { (index, label) ->
-                        val answer = WhatsAppCalls.isAnswer(label)
-                        val end = WhatsAppCalls.isDecline(label) || WhatsAppCalls.isEnd(label)
-                        FilledTonalButton(
-                            onClick = { actions.pressMirror(call, index, label) },
-                            colors = androidx.compose.material3.ButtonDefaults.filledTonalButtonColors(
-                                containerColor = when {
-                                    answer -> CallGreen
-                                    end -> MaterialTheme.colorScheme.error
-                                    else -> MaterialTheme.colorScheme.secondaryContainer
-                                },
-                                contentColor = when {
-                                    answer -> Color.White
-                                    end -> MaterialTheme.colorScheme.onError
-                                    else -> MaterialTheme.colorScheme.onSecondaryContainer
-                                },
-                            ),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            if (answer || end) {
-                                Icon(if (answer) Icons.Default.Call else Icons.Default.CallEnd, null)
-                                Spacer(Modifier.width(6.dp))
-                            }
-                            Text(label, maxLines = 1)
-                        }
-                    }
-                }
-            }
-            LaunchedEffect(call.key) {
-                while (true) {
-                    actions.refreshGatewayAudio()
-                    delay(3000)
-                }
-            }
-            Text("Gateway call volume: " + ui.gatewayVolume + " / " + ui.gatewayMaxVolume)
-            Slider(
-                value = ui.gatewayVolume.coerceIn(0, ui.gatewayMaxVolume).toFloat(),
-                onValueChange = { actions.setGatewayVolume(it.toInt()) },
-                valueRange = 0f..ui.gatewayMaxVolume.coerceAtLeast(1).toFloat(),
-                steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0),
-                enabled = ui.connected,
-            )
-            if (call.pkg.startsWith("com.whatsapp") && !call.ringing && ui.connected) {
-                Text("Experimental audio route · " + ui.gatewayAudioRoute)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { actions.setGatewayRoute("EARPIECE") }) { Text("Earpiece") }
-                    OutlinedButton(onClick = { actions.setGatewayRoute("SPEAKER") }) { Text("Speaker") }
-                }
-                Text("WhatsApp may override the selected route.",
-                    style = MaterialTheme.typography.bodySmall)
-            }
-            Text(
-                "The call runs on the Gateway: talk through its earpiece or Bluetooth headset.",
                 style = MaterialTheme.typography.bodySmall,
             )
         }
@@ -512,18 +487,13 @@ private fun KeypadPane(
                         }
                     }
 
-                    // WhatsApp · Call · Delete, in the same three columns as the keys.
+                    // SIM call · Delete, in the same three columns as the keys.
                     Row(horizontalArrangement = Arrangement.spacedBy(hGap), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(key), contentAlignment = Alignment.Center) {
-                            FilledTonalIconButton(
-                                onClick = { actions.whatsappCall(number, name) },
-                                enabled = ui.connected && number.isNotEmpty() && ui.whatsappStatus?.startsWith("PENDING:") != true,
-                                modifier = Modifier.size(key * 0.72f),
-                            ) { Icon(Icons.AutoMirrored.Filled.Chat, contentDescription = "WhatsApp call on the Gateway") }
-                        }
+                        Spacer(Modifier.size(key))
                         FilledTonalIconButton(
                             onClick = { actions.simCall(number, name) },
-                            enabled = ui.connected && number.isNotEmpty() && ui.callState == LinkService.CALL_IDLE,
+                            enabled = ui.connected && CallerId.asNumber(number).isNotEmpty() &&
+                                ui.callState == LinkService.CALL_IDLE,
                             colors = IconButtonDefaults.filledTonalIconButtonColors(containerColor = CallGreen, contentColor = Color.White),
                             modifier = Modifier.size(key),
                         ) { Icon(Icons.Default.Call, contentDescription = "Call through the Gateway SIM", Modifier.size(key * 0.4f)) }
@@ -582,11 +552,11 @@ private fun FavouriteStrip(favourites: List<Contact>, onPick: (Contact) -> Unit)
     }
 }
 
-/** The last SIM or WhatsApp request's result, so a failed call isn't silent. */
+/** The last SIM request's result, so a failed call isn't silent. */
 @Composable
 private fun StatusLine(ui: CallsUi) {
     val sim = ui.simStatus?.takeIf { it.startsWith("FAILED:") || it.startsWith("PENDING:") }
-    val status = sim ?: ui.whatsappStatus
+    val status = sim
     AnimatedVisibility(status != null) {
         val s = status.orEmpty()
         Text(
@@ -608,8 +578,14 @@ private fun StatusLine(ui: CallsUi) {
 @Composable
 private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onEdit: (String) -> Unit) {
     val records by CallHistory.records.collectAsState()
-    var expanded by remember { mutableStateOf<Int?>(null) }
+    val context = LocalContext.current
+    var simFilter by rememberSaveable { mutableStateOf(SimRecentsAnalytics.Filter.ALL.name) }
+    var expandedRecent by rememberSaveable { mutableStateOf("") }
+    val selectedFilter = SimRecentsAnalytics.Filter.entries.firstOrNull { it.name == simFilter }
+        ?: SimRecentsAnalytics.Filter.ALL
+    val shownRecords = SimRecentsAnalytics.filter(records, selectedFilter)
     var confirmClear by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf<CallHistory.Record?>(null) }
 
     if (records.isEmpty()) {
         EmptyState(Icons.Default.History, "No calls yet", "Calls you make or get through the Gateway show up here.")
@@ -617,49 +593,107 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
     }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 16.dp)) {
         item {
+            Row(Modifier.fillMaxWidth()) {
+                SimRecentsAnalytics.Filter.entries.forEach { choice ->
+                    TextButton(onClick = { simFilter = choice.name }, modifier = Modifier.weight(1f)) {
+                        Text(choice.title, maxLines = 1)
+                    }
+                }
+            }
+        }
+        item {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Text("${records.size} calls", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
+                Text("${shownRecords.size} saved SIM calls (latest 100)", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.weight(1f))
                 TextButton(onClick = { confirmClear = true }) {
                     Icon(Icons.Default.DeleteSweep, null, Modifier.size(18.dp)); Spacer(Modifier.width(4.dp)); Text("Clear")
                 }
             }
         }
         var lastDay = ""
-        records.forEachIndexed { index, r ->
-            val day = dayLabel(r.at)
+        shownRecords.forEachIndexed { index, record ->
+            val day = dayLabel(record.at)
             if (day != lastDay) {
                 lastDay = day
                 item(key = "day-$index") {
-                    Text(day, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                    Text(day, style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
                 }
             }
-            item(key = "call-$index-${r.at}") {
-                val name = r.name.ifEmpty { names.exact(r.number)?.name.orEmpty() }
-                PersonRow(
-                    title = name.ifEmpty { r.number.ifEmpty { "Unknown number" } },
-                    titleColor = if (r.type == CallHistory.Type.MISSED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                    subtitle = buildString {
-                        if (r.whatsapp) append("WhatsApp · ")
-                        append(typeLabel(r.type))
-                        append(" · ")
-                        append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(r.at)))
-                        if (r.durationSec > 0) append(" · ").append(duration(r.durationSec))
-                    },
-                    leading = {
-                        Icon(
-                            typeIcon(r.type), contentDescription = typeLabel(r.type),
-                            tint = if (r.type == CallHistory.Type.MISSED || r.type == CallHistory.Type.DECLINED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(24.dp),
-                        )
-                    },
-                    number = r.number,
-                    name = name,
-                    expanded = expanded == index,
-                    onToggle = { expanded = if (expanded == index) null else index },
-                    ui = ui,
-                    actions = actions,
-                    onEdit = onEdit,
-                )
+            item(key = "call-$index-${record.at}") {
+                val name = record.name.ifEmpty { names.exact(record.number)?.name.orEmpty() }
+                val flags = RecentCallActionsPolicy.availability(
+                    record, ui.connected, ui.callState == LinkService.CALL_IDLE, ui.availableSimSlots)
+                val key = "$index-${record.at}"
+                Column {
+                    ListItem(
+                        modifier = Modifier.clickable {
+                            expandedRecent = if (expandedRecent == key) "" else key
+                        },
+                        headlineContent = {
+                            Text(name.ifEmpty { record.number.ifEmpty { "Unknown number" } },
+                                color = if (record.type == CallHistory.Type.MISSED)
+                                    MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface)
+                        },
+                        supportingContent = {
+                            Text(buildString {
+                                append(typeLabel(record.type))
+                                append(" · ").append(DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(record.at)))
+                                if (record.durationSec > 0) append(" · ").append(duration(record.durationSec))
+                                append(" · ").append(record.simIdentity?.description() ?: "SIM")
+                                if (name.isNotEmpty() && record.number.isNotEmpty())
+                                    append(" · ").append(record.number)
+                            })
+                        },
+                        leadingContent = {
+                            Icon(typeIcon(record.type), contentDescription = typeLabel(record.type),
+                                tint = if (record.type == CallHistory.Type.MISSED || record.type == CallHistory.Type.DECLINED)
+                                    MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                        },
+                        trailingContent = {
+                            if (flags.quickCall) {
+                                IconButton(onClick = { actions.simCall(record.number, name) }) {
+                                    Icon(Icons.Default.Call, contentDescription = "Call ${record.number}",
+                                        tint = MaterialTheme.colorScheme.primary)
+                                }
+                            }
+                        },
+                    )
+                    AnimatedVisibility(visible = expandedRecent == key) {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                TextButton(onClick = { Favourites.toggle(Contact(name, record.number)) },
+                                    enabled = flags.contact) {
+                                    Text(if (Favourites.isFavourite(record.number)) "Unstar" else "Favourite")
+                                }
+                                TextButton(onClick = { onEdit(record.number) }, enabled = flags.copy) {
+                                    Text("Edit")
+                                }
+                                TextButton(onClick = {
+                                    context.getSystemService(android.content.ClipboardManager::class.java)
+                                        ?.setPrimaryClip(android.content.ClipData.newPlainText("Phone number", record.number))
+                                }, enabled = flags.copy) { Text("Copy") }
+                            }
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                                if (flags.simOne) TextButton(onClick = {
+                                    actions.simCallFromSlot(record.number, name, 0)
+                                }) { Text("SIM 1") }
+                                if (flags.simTwo) TextButton(onClick = {
+                                    actions.simCallFromSlot(record.number, name, 1)
+                                }) { Text("SIM 2") }
+                                TextButton(onClick = {
+                                    RecentCallActionsPolicy.share(record, name)?.let { share ->
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_SEND)
+                                            .setType("text/plain")
+                                            .putExtra(android.content.Intent.EXTRA_TEXT, share)
+                                        context.startActivity(android.content.Intent.createChooser(intent, "Share call details"))
+                                    }
+                                }, enabled = flags.share) { Text("Share") }
+                                TextButton(onClick = { confirmDelete = record }) { Text("Delete") }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -668,8 +702,20 @@ private fun RecentsPane(ui: CallsUi, actions: CallsActions, names: NameBook, onE
             onDismissRequest = { confirmClear = false },
             title = { Text("Clear call history?") },
             text = { Text("This removes the list on this phone only. The Gateway's own call log isn't touched.") },
-            confirmButton = { TextButton(onClick = { CallHistory.clear(); confirmClear = false; expanded = null }) { Text("Clear") } },
+            confirmButton = { TextButton(onClick = { CallHistory.clearSim(); confirmClear = false }) { Text("Clear") } },
             dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } },
+        )
+    }
+    confirmDelete?.let { selected ->
+        AlertDialog(
+            onDismissRequest = { confirmDelete = null },
+            title = { Text("Delete recent call?") },
+            text = { Text("Only this local history entry will be removed.") },
+            confirmButton = { TextButton(onClick = {
+                CallHistory.remove(selected)
+                confirmDelete = null
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { confirmDelete = null }) { Text("Cancel") } },
         )
     }
 }
@@ -752,7 +798,7 @@ private fun ContactRow(
 
 // ---------------------------------------------------------------- shared rows
 
-/** A person or call: tap to show Call / WhatsApp / Favourite / Edit; the phone icon calls at once. */
+/** A person or call: tap to show Call / Favourite / Edit; the phone icon calls at once. */
 @Composable
 private fun PersonRow(
     title: String,
@@ -767,7 +813,8 @@ private fun PersonRow(
     onEdit: (String) -> Unit,
     titleColor: Color = MaterialTheme.colorScheme.onSurface,
 ) {
-    val canCall = ui.connected && number.isNotEmpty() && ui.callState == LinkService.CALL_IDLE
+    val canCall = ui.connected && CallerId.asNumber(number).isNotEmpty() &&
+        ui.callState == LinkService.CALL_IDLE
     val favourite = Favourites.list.collectAsState().value.any { Favourites.key(it.number) == Favourites.key(number) }
     Column(
         Modifier.fillMaxWidth().clip(MaterialTheme.shapes.large)
@@ -798,7 +845,6 @@ private fun PersonRow(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 modifier = Modifier.fillMaxWidth().padding(start = 52.dp, top = 6.dp),
             ) {
-                ChipButton(Icons.AutoMirrored.Filled.Chat, "WhatsApp", enabled = ui.connected && number.isNotEmpty()) { actions.whatsappCall(number, name) }
                 ChipButton(if (favourite) Icons.Default.Star else Icons.Default.StarBorder, if (favourite) "Unstar" else "Favourite", enabled = number.isNotEmpty()) {
                     Favourites.toggle(Contact(name, number))
                 }
@@ -914,7 +960,6 @@ private fun typeLabel(t: CallHistory.Type): String = when (t) {
     CallHistory.Type.OUTGOING -> "Outgoing"
     CallHistory.Type.MISSED -> "Missed"
     CallHistory.Type.DECLINED -> "Declined"
-    CallHistory.Type.WHATSAPP -> "WhatsApp"
 }
 
 private fun typeIcon(t: CallHistory.Type): ImageVector = when (t) {
@@ -922,7 +967,6 @@ private fun typeIcon(t: CallHistory.Type): ImageVector = when (t) {
     CallHistory.Type.OUTGOING -> Icons.AutoMirrored.Filled.CallMade
     CallHistory.Type.MISSED -> Icons.AutoMirrored.Filled.CallMissed
     CallHistory.Type.DECLINED -> Icons.Default.PhoneDisabled
-    CallHistory.Type.WHATSAPP -> Icons.AutoMirrored.Filled.Chat
 }
 
 private fun dayLabel(at: Long): String {

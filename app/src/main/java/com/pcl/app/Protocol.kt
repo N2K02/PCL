@@ -23,32 +23,51 @@ object Protocol {
      * versions are reported instead of failing silently.
      *  - no number: PCL 2.1 and older
      *  - 3: HELLO carries versions; Gateway reports hotspot status (HOTSPOT_STATE)
-     *  - 4: the Remote can ask the Gateway to start a WhatsApp call (WHATSAPP_CALL)
-     *  - 5: the Wi-Fi hotspot workaround is gone (no HOTSPOT_STATE, no WHATSAPP_CALL_TRIGGER)
+     *  - 5: removed the legacy Wi-Fi hotspot workaround
+     *  - 7: SIM-only command surface; third-party calls and notification mirroring removed
+     *  - 8: remote-selectable Gateway volume modes and synchronized mode status
+     *  - 9: verified SIM dialing and acknowledged optional CallLog enrichment
+     *  - 10: call-control request IDs and confirmed connection compatibility
+     *  - 11: match Answer/Reject/Hangup to the live Gateway SIM call instance
+     *  - 12: bind volume/route commands to the live SIM call instance
      */
-    const val VERSION = 6
+    const val VERSION = 12
 }
 
 /**
  * Which phone may act on each command. A command arriving at the wrong role is ignored,
  * so a peer can't, for example, make a Remote place calls.
- * HELLO goes both ways and is in neither set. WHATSAPP_CALL_STATE goes from the Gateway to
- * the Remote; older Remotes also sent their own, which the Gateway ignores.
+ * HELLO goes both ways and is in neither set.
  */
 object Commands {
     /** Sent by the Remote; handled only on the Gateway. */
     val GATEWAY_HANDLES = setOf(
-        "ANSWER", "REJECT", "HANGUP", "DIAL", "SYNC_CONTACTS",
-        "WHATSAPP_CHAT", "WHATSAPP_CALL", "NOTIF_DISMISS", "NOTIF_ACTION",
-        "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY"
+        "ANSWER", "REJECT", "HANGUP", "DIAL", "DIAL_SIM", "CALL_LOG_ACK", "SYNC_CONTACTS",
+        "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY", "AUDIO_MODE"
     )
 
     /** Sent by the Gateway; handled only on the Remote. */
     val REMOTE_HANDLES = setOf(
-        "CALL", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
-        "CONTACTS_RESULT", "NOTIF", "NOTIF_V2", "CALL_NOTIF", "NOTIF_REMOVE", "NOTIF_CLEAR_ORDINARY",
-        "WHATSAPP_CHAT_RESULT", "WHATSAPP_CALL_RESULT", "NOTIF_ACTION_RESULT", "AUDIO_STATUS"
+        "CALL", "CALL_LOGGED", "CALL_RESULT", "CONTACTS_HASH", "CONTACTS_BEGIN", "CONTACTS", "CONTACTS_END",
+        "CONTACTS_RESULT", "AUDIO_STATUS", "AUDIO_RESULT"
     )
+}
+
+/** Device-independent request correlation and authoritative phone-state confirmation. */
+internal object CallControlProtocol {
+    fun peerRoleMatches(ourRole: String, peerRole: String): Boolean =
+        (ourRole == LinkService.ROLE_GATEWAY && peerRole == LinkService.ROLE_REMOTE) ||
+            (ourRole == LinkService.ROLE_REMOTE && peerRole == LinkService.ROLE_GATEWAY)
+
+    fun matchesResult(expectedId: Int, pendingCommand: String?, receivedId: String?): Boolean =
+        expectedId > 0 && pendingCommand != null &&
+            receivedId?.toIntOrNull() == expectedId
+
+    fun stateConfirmed(command: String?, state: String): Boolean = when (command) {
+        "ANSWER", "DIAL", "DIAL_SIM" -> state == LinkService.CALL_OFFHOOK
+        "REJECT", "HANGUP" -> state == LinkService.CALL_IDLE
+        else -> false
+    }
 }
 
 class FrameWriter(stream: OutputStream) {
@@ -80,10 +99,19 @@ object Hub {
 
     private val main = Handler(Looper.getMainLooper())
 
-    /** Writes to Logcat and to the in-app activity log. */
+    /** Redact before writing any user-visible or USB-readable diagnostics. */
     fun log(msg: String) {
-        android.util.Log.i("PCL", msg)
-        CallLogger.log(msg)
+        val safeEvent = when {
+            msg.startsWith("Connected to ") -> "Connected to selected Bluetooth peer"
+            msg.startsWith("Connecting to ") -> "Connecting to selected Bluetooth peer"
+            msg.startsWith("Waiting for ") -> "Waiting for selected Bluetooth peer"
+            msg.startsWith("Refused Bluetooth connection from ") -> "Rejected unselected Bluetooth peer"
+            else -> msg
+        }
+        val redacted = AppLog.redact(safeEvent)
+        android.util.Log.i("PCL", redacted)
+        CallLogger.log(redacted)
+        AppLog.add("LINK", redacted)
         notifyUi()
     }
 
