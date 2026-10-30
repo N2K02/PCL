@@ -67,6 +67,19 @@ class SimCallConcurrencySafetyTest {
         assertTrue(lock.contains("if (!submitted)"))
     }
 
+    @Test fun restartAndDisconnectDropStaleCallIdentity() {
+        val service = source("LinkService")
+        val shutdown = service.substringAfter("private fun shutdown()")
+            .substringBefore("private fun send(vararg parts: String)")
+        assertTrue(shutdown.contains("simCallStartedMs = 0L"))
+        assertTrue(shutdown.contains("activeCallToken = null"))
+        assertTrue(shutdown.contains("callNumber = \"\""))
+        val session = service.substringAfter("private fun runSession(")
+            .substringBefore("private fun closeSocket()")
+        assertTrue(session.contains("activeCallToken = null"))
+        assertTrue(session.contains("callDirection = \"\""))
+    }
+
     @Test fun ambiguousSimTimelineDoesNotCreateFalseMissedHistory() {
         val service = source("LinkService")
         val remote = service.substringAfter("\"CALL\" -> {").substringBefore("\"CALL_LOGGED\" -> {")
