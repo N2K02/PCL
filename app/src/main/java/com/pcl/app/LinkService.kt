@@ -216,9 +216,12 @@ class LinkService : Service() {
     }
 
     private fun gatewayAudioStep(raw: String, requestId: String = "") {
-        val audio = getSystemService(AudioManager::class.java) ?: return
-        val delta = raw.toIntOrNull() ?: return
-        if (delta !in -1..1 || delta == 0) return
+        val audio = getSystemService(AudioManager::class.java)
+        val delta = raw.toIntOrNull()
+        if (audio == null || delta == null || delta !in -1..1 || delta == 0) {
+            send("AUDIO_RESULT", "STEP", "INVALID", requestId)
+            return
+        }
         val stream = gatewayStream(audio)
         try {
             val before = audio.getStreamVolume(stream)
@@ -244,11 +247,20 @@ class LinkService : Service() {
 
     /** Explicit PCL routing overrides must not remain after the SIM call ends. */
     private var ownsCommunicationRoute = false
+    private var ownsLegacyBluetoothSco = false
     private fun releaseGatewayAudioRoute() {
-        if (role == ROLE_GATEWAY && ownsCommunicationRoute && Build.VERSION.SDK_INT >= 31) {
-            runCatching { getSystemService(AudioManager::class.java)?.clearCommunicationDevice() }
+        if (role == ROLE_GATEWAY) {
+            val audio = getSystemService(AudioManager::class.java)
+            if (ownsCommunicationRoute && Build.VERSION.SDK_INT >= 31) {
+                runCatching { audio?.clearCommunicationDevice() }
+            }
+            if (ownsLegacyBluetoothSco && Build.VERSION.SDK_INT < 31) {
+                @Suppress("DEPRECATION")
+                runCatching { audio?.stopBluetoothSco() }
+            }
         }
         ownsCommunicationRoute = false
+        ownsLegacyBluetoothSco = false
     }
 
     private fun gatewayRoute(audio: AudioManager): String {
@@ -306,8 +318,12 @@ class LinkService : Service() {
     }
 
     private fun gatewaySetAudioVolume(raw: String, requestId: String = "") {
-        val audio = getSystemService(AudioManager::class.java) ?: return
-        val level = raw.toIntOrNull() ?: return
+        val audio = getSystemService(AudioManager::class.java)
+        val level = raw.toIntOrNull()
+        if (audio == null || level == null) {
+            send("AUDIO_RESULT", "VOLUME", "INVALID", requestId)
+            return
+        }
         val stream = gatewayStream(audio)
         try {
             val before = audio.getStreamVolume(stream)
@@ -364,12 +380,16 @@ class LinkService : Service() {
                 when (route) {
                     "BLUETOOTH" -> {
                         audio.startBluetoothSco()
+                        ownsLegacyBluetoothSco = true
                         audio.isBluetoothScoOn = true
                     }
                     "SPEAKER", "EARPIECE" -> {
-                        // In-call Bluetooth SCO may be owned by the system dialer.
-                        // This is best effort; the actual route is checked below.
-                        audio.isBluetoothScoOn = false
+                        // Release only the SCO request started by PCL, not the
+                        // system dialer's own Bluetooth call-audio connection.
+                        if (ownsLegacyBluetoothSco) {
+                            audio.stopBluetoothSco()
+                            ownsLegacyBluetoothSco = false
+                        }
                         audio.isSpeakerphoneOn = route == "SPEAKER"
                     }
                 }
@@ -990,6 +1010,7 @@ class LinkService : Service() {
                 connected = false
                 clearPendingAudioRequests()
                 cancelRouteVerification()
+                if (role == ROLE_GATEWAY) releaseGatewayAudioRoute()
                 gatewayAvailableAudioRoutes = emptySet()
                 gatewayAudioRoute = "UNKNOWN"
                 contactBuf = null
