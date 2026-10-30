@@ -28,3 +28,19 @@ internal object RemoteCallOwnershipPolicy {
             nowMs - dialStartedAtMs < dialWindowMs
     }
 }
+
+/** Aggregate telephony states cannot identify which call to control during call waiting. */
+internal object SimCallConcurrencyPolicy {
+    fun isWaiting(previous: String, next: String): Boolean =
+        previous == LinkService.CALL_OFFHOOK && next == LinkService.CALL_RINGING
+
+    /** Under uncertainty we keep audio on the Gateway and disable remote call control. */
+    fun shouldBlock(callWaitingSeen: Boolean, multipleActiveSubscriptions: Boolean): Boolean =
+        callWaitingSeen || multipleActiveSubscriptions
+
+    fun shouldRecheck(current: String, observed: String?, waitingSeen: Boolean): Boolean =
+        observed != null && current != LinkService.CALL_IDLE &&
+            (observed == LinkService.CALL_IDLE ||
+                (current == LinkService.CALL_RINGING && observed == LinkService.CALL_OFFHOOK) ||
+                (current == LinkService.CALL_OFFHOOK && observed == LinkService.CALL_RINGING && !waitingSeen))
+}
