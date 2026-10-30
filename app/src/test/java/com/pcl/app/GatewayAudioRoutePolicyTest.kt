@@ -99,6 +99,7 @@ class GatewayAudioRoutePolicyTest {
         assertTrue(incoming.contains("gatewayAudioCommandAllowed(p.getOrNull(3), \"STEP\""))
         assertTrue(incoming.contains("gatewayAudioCommandAllowed(p.getOrNull(3), \"ROUTE\""))
         assertTrue(service.contains("SimCallTokenPolicy.matches(simCallStartedMs, token)"))
+        assertTrue(service.contains("observed != null && observed != CALL_IDLE"))
         assertTrue(service.contains("send(\"AUDIO_RESULT\", kind, \"STALE_CALL\", requestId)"))
     }
 
