@@ -57,7 +57,7 @@ class SimOnlyContractTest {
         val service = source("app/src/main/java/com/pcl/app/LinkService.kt")
         val protocol = source("app/src/main/java/com/pcl/app/Protocol.kt")
         val screen = source("app/src/main/java/com/pcl/app/CallsScreen.kt")
-        assertTrue(protocol.contains("const val VERSION = 11"))
+        assertTrue(protocol.contains("const val VERSION = 12"))
         assertTrue(protocol.contains("\"AUDIO_MODE\""))
         listOf("\"AUTO\"", "\"CALL\"", "\"MEDIA\"", "\"RING\"").forEach {
             assertTrue(service.contains(it))
