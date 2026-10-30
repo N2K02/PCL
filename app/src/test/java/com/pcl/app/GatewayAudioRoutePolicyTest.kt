@@ -35,6 +35,35 @@ class GatewayAudioRoutePolicyTest {
         assertFalse(GatewayAudioRoutePolicy.matches("EARPIECE", AudioDeviceInfo.TYPE_BUILTIN_SPEAKER))
     }
 
+    @Test fun remoteNotificationCyclesOnlyGatewayAvailableCallOutputs() {
+        val all = setOf("EARPIECE", "SPEAKER", "BLUETOOTH")
+        assertEquals("SPEAKER", GatewayAudioRoutePolicy.next("EARPIECE", all))
+        assertEquals("BLUETOOTH", GatewayAudioRoutePolicy.next("SPEAKER", all))
+        assertEquals("EARPIECE", GatewayAudioRoutePolicy.next("BLUETOOTH", all))
+        assertEquals("BLUETOOTH", GatewayAudioRoutePolicy.next("UNKNOWN",
+            setOf("BLUETOOTH", "SPEAKER")))
+        assertEquals("SPEAKER", GatewayAudioRoutePolicy.next("EARPIECE",
+            setOf("SPEAKER", "BLUETOOTH")))
+        assertEquals(null, GatewayAudioRoutePolicy.next("BLUETOOTH", setOf("BLUETOOTH")))
+        assertEquals(null, GatewayAudioRoutePolicy.next("UNKNOWN", emptySet()))
+    }
+
+    @Test fun audioTimeoutAndRouteSupersessionAreReported() {
+        val link = source("LinkService")
+        assertTrue(link.contains("gatewayAudioError = \"Gateway did not confirm $command (timeout)\""))
+        assertTrue(link.contains("cancelRouteVerification(\"SUPERSEDED\")"))
+        assertTrue(link.contains("cancelRouteVerification(\"NO_CALL\")"))
+        assertTrue(link.contains("pendingRouteVerificationId = requestId"))
+        assertTrue(link.contains("send(\"AUDIO_RESULT\", \"ROUTE_VERIFY\", outcome, canceledId)"))
+        assertTrue(link.contains("GatewayAudioRoutePolicy.next("))
+        assertTrue(link.contains("\"Change audio output\""))
+        val screen = source("CallsScreen")
+        assertTrue(screen.contains("var pendingVolume by remember(ui.callState)"))
+        assertTrue(screen.contains("pendingVolume = target"))
+        assertTrue(screen.contains("if (pendingVolume != null) \" · applying…\""))
+        assertTrue(screen.contains("if (ui.gatewayAudioError != null) pendingVolume = null"))
+    }
+
     @Test fun remoteVolumeAndRouteCommandsReachGatewayAndReplyWithObservedStatus() {
         val link = source("LinkService")
         val calls = source("CallsScreen")
