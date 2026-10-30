@@ -75,6 +75,7 @@ class LinkService : Service() {
         const val ACTION_CALL_BACK = "com.pcl.app.CALL_BACK"
         const val EXTRA_NUMBER = "number"
         const val EXTRA_NAME = "name"
+        const val EXTRA_CALL_TOKEN = "call_token"
         /** MainActivity: which tab to open ("calls"). */
         const val EXTRA_OPEN_TAB = "open_tab"
         const val EXTRA_ROLE = "role"
@@ -523,9 +524,16 @@ class LinkService : Service() {
                 shutdown()
                 stopSelf()
             }
-            ACTION_ANSWER -> if (running) answer() else stopSelf()
-            ACTION_REJECT -> if (running) reject() else stopSelf()
-            ACTION_HANGUP -> if (running) hangUp() else stopSelf()
+            ACTION_ANSWER, ACTION_REJECT, ACTION_HANGUP -> {
+                if (!running) stopSelf()
+                else if (validNotificationCallAction(intent)) {
+                    when (intent.action) {
+                        ACTION_ANSWER -> answer()
+                        ACTION_REJECT -> reject()
+                        ACTION_HANGUP -> hangUp()
+                    }
+                } else Hub.log("Ignored stale notification action for a different SIM call")
+            }
             ACTION_AUDIO_DOWN, ACTION_AUDIO_UP -> if (running && role == ROLE_REMOTE && connected) {
                 val delta = if (intent.action == ACTION_AUDIO_UP) 1 else -1
                 Hub.log("Remote audio step: $delta")
@@ -574,6 +582,30 @@ class LinkService : Service() {
     }
 
     // ---------------------------------------------------------------- public actions (UI)
+
+    /** A lock-screen action is valid only for the call that opened that screen. */
+    fun currentIncomingToken(): Long? = activeCallToken.takeIf {
+        role == ROLE_REMOTE && callState == CALL_RINGING && !callControlsRestricted
+    }
+
+    fun answerForCall(token: Long?) {
+        if (token != null && currentIncomingToken() == token) answer()
+    }
+
+    fun rejectForCall(token: Long?) {
+        if (token != null && currentIncomingToken() == token) reject()
+    }
+
+    private fun validNotificationCallAction(intent: Intent): Boolean {
+        val token = intent.getLongExtra(EXTRA_CALL_TOKEN, 0L)
+        val action = intent.action.orEmpty()
+        return role == ROLE_REMOTE && token > 0L && activeCallToken == token &&
+            !callControlsRestricted && when (action) {
+                ACTION_ANSWER, ACTION_REJECT -> callState == CALL_RINGING
+                ACTION_HANGUP -> callState == CALL_OFFHOOK
+                else -> false
+            }
+    }
 
     fun answer() {
         if (role == ROLE_GATEWAY) {
@@ -1992,7 +2024,11 @@ class LinkService : Service() {
 
     private fun actionPi(action: String, req: Int): PendingIntent = PendingIntent.getService(
         this, req,
-        Intent(this, LinkService::class.java).setAction(action),
+        Intent(this, LinkService::class.java).setAction(action)
+            // Make each call's PendingIntent distinct. A stale notification must not
+            // inherit the next call's updated extras through FLAG_UPDATE_CURRENT.
+            .setData(Uri.parse("pcl-sim-call:${activeCallToken ?: 0L}/$action"))
+            .putExtra(EXTRA_CALL_TOKEN, activeCallToken ?: 0L),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
     )
 
