@@ -99,6 +99,7 @@ import java.text.Normalizer
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** What the Calls tab shows. Read from [LinkService] by MainActivity on every refresh. */
 class CallsUi(
@@ -114,6 +115,7 @@ class CallsUi(
     val gatewayMaxVolume: Int,
     val gatewayAudioRoute: String,
     val gatewayVolumeMode: String,
+    val gatewayAvailableAudioRoutes: Set<String> = emptySet(),
     val availableSimSlots: Set<Int> = emptySet(),
 )
 
@@ -259,17 +261,38 @@ private fun ActiveCallCard(ui: CallsUi, actions: CallsActions) {
                             )
                         }
                 }
-                Text("Gateway volume: " + ui.gatewayVolume + " / " + ui.gatewayMaxVolume)
-                Slider(value = ui.gatewayVolume.coerceIn(0, ui.gatewayMaxVolume).toFloat(),
-                    onValueChange = { actions.setGatewayVolume(it.toInt()) },
+                // Drag locally; send one authoritative volume command on release.
+                // Gateway status remains the source of truth after it responds.
+                var localVolume by remember { mutableStateOf(ui.gatewayVolume.toFloat()) }
+                var isDraggingVolume by remember { mutableStateOf(false) }
+                LaunchedEffect(ui.gatewayVolume, ui.gatewayMaxVolume, isDraggingVolume) {
+                    if (!isDraggingVolume) localVolume = ui.gatewayVolume.toFloat()
+                }
+                Text("Gateway volume: " + (if (isDraggingVolume) localVolume.roundToInt()
+                    else ui.gatewayVolume) + " / " + ui.gatewayMaxVolume)
+                Slider(
+                    value = localVolume.coerceIn(0f, ui.gatewayMaxVolume.coerceAtLeast(1).toFloat()),
+                    onValueChange = { localVolume = it; isDraggingVolume = true },
+                    onValueChangeFinished = {
+                        val target = localVolume.roundToInt()
+                        isDraggingVolume = false
+                        actions.setGatewayVolume(target)
+                    },
                     valueRange = 0f..ui.gatewayMaxVolume.coerceAtLeast(1).toFloat(),
-                    steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0))
+                    steps = (ui.gatewayMaxVolume - 1).coerceAtLeast(0),
+                )
                 Text("SIM audio output: " + ui.gatewayAudioRoute)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { actions.setGatewayRoute("EARPIECE") },
-                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Earpiece") }
-                    OutlinedButton(onClick = { actions.setGatewayRoute("SPEAKER") },
-                        enabled = ui.callState == LinkService.CALL_OFFHOOK) { Text("Speaker") }
+                    listOf("EARPIECE" to "Earpiece", "SPEAKER" to "Speaker",
+                        "BLUETOOTH" to "Bluetooth").forEach { (route, label) ->
+                        OutlinedButton(
+                            onClick = { actions.setGatewayRoute(route) },
+                            enabled = ui.callState == LinkService.CALL_OFFHOOK &&
+                                !ui.controlsRestricted &&
+                                route in ui.gatewayAvailableAudioRoutes &&
+                                ui.gatewayAudioRoute != route,
+                        ) { Text(label) }
+                    }
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
