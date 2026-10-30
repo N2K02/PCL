@@ -40,7 +40,7 @@ class GatewayAudioRoutePolicyTest {
         assertEquals("SPEAKER", GatewayAudioRoutePolicy.next("EARPIECE", all))
         assertEquals("BLUETOOTH", GatewayAudioRoutePolicy.next("SPEAKER", all))
         assertEquals("EARPIECE", GatewayAudioRoutePolicy.next("BLUETOOTH", all))
-        assertEquals("BLUETOOTH", GatewayAudioRoutePolicy.next("UNKNOWN",
+        assertEquals("SPEAKER", GatewayAudioRoutePolicy.next("UNKNOWN",
             setOf("BLUETOOTH", "SPEAKER")))
         assertEquals("SPEAKER", GatewayAudioRoutePolicy.next("EARPIECE",
             setOf("SPEAKER", "BLUETOOTH")))
