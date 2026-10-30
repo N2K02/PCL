@@ -1,6 +1,7 @@
 package com.pcl.app
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -16,15 +17,22 @@ import android.widget.TextView
 class IncomingCallActivity : Activity() {
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var caller: TextView
+    private lateinit var answerButton: Button
+    private lateinit var declineButton: Button
+    private var presentedToken: Long? = null
+    private var submitted = false
     private val refresh = object : Runnable {
         override fun run() {
             val service = Hub.service
-            if (service?.role != LinkService.ROLE_REMOTE ||
-                service.callState != LinkService.CALL_RINGING || !service.isActive) {
+            if (service?.role != LinkService.ROLE_REMOTE || !service.isActive ||
+                presentedToken == null || service.currentIncomingToken() != presentedToken) {
                 finish()
                 return
             }
             caller.text = service.display()
+            if (submitted && service.callControlError?.startsWith("PENDING:") != true) submitted = false
+            answerButton.isEnabled = !submitted
+            declineButton.isEnabled = !submitted
             handler.postDelayed(this, 500L)
         }
     }
@@ -39,6 +47,7 @@ class IncomingCallActivity : Activity() {
             window.addFlags(WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
                 WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON)
         }
+        presentedToken = Hub.service?.currentIncomingToken()
         val padding = (24 * resources.displayMetrics.density).toInt()
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -61,17 +70,41 @@ class IncomingCallActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
         }
-        buttons.addView(Button(this).apply {
+        declineButton = Button(this).apply {
             text = "Decline"
-            setOnClickListener { Hub.service?.reject() }
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        buttons.addView(Button(this).apply {
+            setOnClickListener {
+                if (!submitted) {
+                    submitted = true
+                    isEnabled = false
+                    answerButton.isEnabled = false
+                    Hub.service?.rejectForCall(presentedToken)
+                }
+            }
+        }
+        buttons.addView(declineButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        answerButton = Button(this).apply {
             text = "Answer"
-            setOnClickListener { Hub.service?.answer() }
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            setOnClickListener {
+                if (!submitted) {
+                    submitted = true
+                    isEnabled = false
+                    declineButton.isEnabled = false
+                    Hub.service?.answerForCall(presentedToken)
+                }
+            }
+        }
+        buttons.addView(answerButton, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(buttons, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
         setContentView(root)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        presentedToken = Hub.service?.currentIncomingToken()
+        submitted = false
+        handler.removeCallbacks(refresh)
+        handler.post(refresh)
     }
 
     override fun onResume() {
