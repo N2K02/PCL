@@ -172,10 +172,15 @@ class LinkService : Service() {
             return
         }
         val token = activeCallToken ?: return
+        gatewayAudioError = null
+        Hub.notifyUi()
         val id = audioRequestSequence.incrementAndGet().toString()
         val timeout = Runnable {
-            if (pendingAudioRequests.remove(id) != null)
+            if (pendingAudioRequests.remove(id) != null) {
+                gatewayAudioError = "Gateway did not confirm $command (timeout)"
                 Hub.log("Audio command timed out: $command")
+                Hub.notifyUi()
+            }
         }
         pendingAudioRequests[id] = timeout
         audioTimeoutHandler.postDelayed(timeout, 5_000L)
@@ -300,9 +305,15 @@ class LinkService : Service() {
     }
 
     private var pendingRouteVerification: Runnable? = null
-    private fun cancelRouteVerification() {
+    private var pendingRouteVerificationId: String? = null
+    private fun cancelRouteVerification(outcome: String? = null) {
         pendingRouteVerification?.let(audioTimeoutHandler::removeCallbacks)
         pendingRouteVerification = null
+        val canceledId = pendingRouteVerificationId
+        pendingRouteVerificationId = null
+        if (outcome != null && canceledId != null && role == ROLE_GATEWAY && connected) {
+            send("AUDIO_RESULT", "ROUTE_VERIFY", outcome, canceledId)
+        }
     }
 
     private fun verifyGatewayRouteLater(route: String, requestId: String) {
@@ -310,6 +321,7 @@ class LinkService : Service() {
         val session = writer
         val task = Runnable {
             pendingRouteVerification = null
+            pendingRouteVerificationId = null
             if (!running || role != ROLE_GATEWAY || !connected || writer !== session ||
                 callState == CALL_IDLE) return@Runnable
             val audio = getSystemService(AudioManager::class.java) ?: return@Runnable
@@ -320,6 +332,7 @@ class LinkService : Service() {
             gatewayAudioStatus()
         }
         pendingRouteVerification = task
+        pendingRouteVerificationId = requestId
         audioTimeoutHandler.postDelayed(task, 1_200L)
     }
 
@@ -384,7 +397,7 @@ class LinkService : Service() {
                 gatewayAudioStatus()
                 return
             }
-            cancelRouteVerification()
+            cancelRouteVerification("SUPERSEDED")
             Hub.log("Gateway audio route requested: $route; mode=${audio.mode}")
             val accepted = if (Build.VERSION.SDK_INT >= 31) {
                 val target = audio.availableCommunicationDevices.firstOrNull {
@@ -644,9 +657,15 @@ class LinkService : Service() {
             }
             ACTION_AUDIO_SPEAKER -> {
                 if (running && connected && validNotificationCallAction(intent)) {
-                    val target = if (gatewayAudioRoute == "SPEAKER") "EARPIECE" else "SPEAKER"
-                    Hub.log("Remote audio route: $target")
-                    requestGatewayRoute(target)
+                    val target = GatewayAudioRoutePolicy.next(
+                        gatewayAudioRoute, gatewayAvailableAudioRoutes)
+                    if (target != null) {
+                        Hub.log("Remote audio route: $target")
+                        requestGatewayRoute(target)
+                    } else {
+                        gatewayAudioError = "No alternative Gateway call-audio output available"
+                        Hub.notifyUi()
+                    }
                 } else Hub.log("Ignored stale notification audio route action")
             }
             ACTION_CALL_BACK -> {
@@ -1551,7 +1570,7 @@ class LinkService : Service() {
         }
         if (newState == CALL_IDLE) {
             releaseGatewayAudioRoute()
-            cancelRouteVerification()
+            cancelRouteVerification("NO_CALL")
             callWaitingSeen = false
             multipleActiveSimCalls = false
             updateControlRestriction()
@@ -2009,7 +2028,7 @@ class LinkService : Service() {
             .setContentIntent(openCallsPi())
             .addAction(action(android.R.drawable.ic_media_previous, "Volume −", actionPi(ACTION_AUDIO_DOWN, 31)))
             .addAction(action(android.R.drawable.ic_media_next, "Volume +", actionPi(ACTION_AUDIO_UP, 32)))
-            .addAction(action(android.R.drawable.ic_lock_silent_mode_off, "Speaker / Earpiece", actionPi(ACTION_AUDIO_SPEAKER, 33)))
+            .addAction(action(android.R.drawable.ic_lock_silent_mode_off, "Change audio output", actionPi(ACTION_AUDIO_SPEAKER, 33)))
             .apply {
                 if (!callControlsRestricted) addAction(action(android.R.drawable.ic_menu_close_clear_cancel,
                     "End call", actionPi(ACTION_HANGUP, 13)))
