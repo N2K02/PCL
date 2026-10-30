@@ -95,6 +95,8 @@ class LinkService : Service() {
         private const val ID_MISSED = 46
         private const val TRAFFIC_SAMPLE_MS = 5_000L
         private const val CALL_CONTROL_TIMEOUT_MS = 15_000L
+        /** Recheck SIM state only while ringing if Android omits OFFHOOK/IDLE events. */
+        private const val PHONE_STATE_RECHECK_MS = 500L
         /** Remote: a SIM call connecting this soon after this phone asked to dial is this phone's. */
         private const val DIAL_WINDOW_MS = 60_000L
         /** Upper bound for a contact sync in characters; protects memory from a misbehaving peer. */
@@ -424,6 +426,27 @@ class LinkService : Service() {
     private val pendingCallLogTasks = mutableSetOf<Runnable>()
     private var receiverRegistered = false
     private var ringtone: Ringtone? = null
+
+    /** Gateway: recover phone-state transitions missed by the Android broadcast. */
+    private val gatewayPhoneStateRecheck = object : Runnable {
+        override fun run() {
+            if (!running || role != ROLE_GATEWAY || callState != CALL_RINGING) return
+            val observed = currentGatewayPhoneState()
+            if (GatewayRingStateSync.changedWhileRinging(callState, observed)) {
+                Hub.log("Recovered missing SIM phone-state transition: $observed")
+                applyGatewayPhoneState(observed!!, null)
+            } else {
+                trafficHandler.postDelayed(this, PHONE_STATE_RECHECK_MS)
+            }
+        }
+    }
+
+    private fun scheduleGatewayPhoneStateRecheck() {
+        trafficHandler.removeCallbacks(gatewayPhoneStateRecheck)
+        if (running && role == ROLE_GATEWAY && callState == CALL_RINGING) {
+            trafficHandler.postDelayed(gatewayPhoneStateRecheck, PHONE_STATE_RECHECK_MS)
+        }
+    }
 
     /** Remote: this phone answered or placed the current SIM call, so it shows it until it ends. */
     @Volatile private var simCallHere = false
@@ -858,6 +881,7 @@ class LinkService : Service() {
         pendingCallLogTasks.clear()
         callLogExecutor.queue.clear()
         trafficHandler.removeCallbacks(trafficSampler)
+        trafficHandler.removeCallbacks(gatewayPhoneStateRecheck)
         downloadBytesPerSecond = 0L; uploadBytesPerSecond = 0L
         generation++
         try {
@@ -952,6 +976,8 @@ class LinkService : Service() {
             "CALL" -> {
                 val previousState = callState
                 callState = arg1.takeIf { it in setOf(CALL_IDLE, CALL_RINGING, CALL_OFFHOOK) } ?: CALL_IDLE
+                // Stop the ringtone before potentially slow synchronous call-history I/O.
+                if (callState != CALL_RINGING) stopSimRinging()
                 if (callState == CALL_RINGING && pendingCallCommand == null) callControlError = null
                 callNumber = CallerId.asNumber(p.getOrElse(2) { "" })
                 val receivedName = p.getOrElse(3) { "" }.trim()
@@ -1219,47 +1245,80 @@ class LinkService : Service() {
 
 
 
+    /** A direct phone-state read supplements missing or delayed OEM broadcasts. */
+    @SuppressLint("MissingPermission")
+    private fun currentGatewayPhoneState(): String? {
+        if (!has(Manifest.permission.READ_PHONE_STATE)) return null
+        return try {
+            @Suppress("DEPRECATION")
+            when (getSystemService(TelephonyManager::class.java)?.callState) {
+                TelephonyManager.CALL_STATE_RINGING -> CALL_RINGING
+                TelephonyManager.CALL_STATE_OFFHOOK -> CALL_OFFHOOK
+                TelephonyManager.CALL_STATE_IDLE -> CALL_IDLE
+                else -> null
+            }
+        } catch (_: Exception) { null }
+    }
+
     private val phoneReceiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context, i: Intent) {
             val st = i.getStringExtra(TelephonyManager.EXTRA_STATE) ?: return
             @Suppress("DEPRECATION")
             val num = i.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER)
-            val previousState = callState
-            val newState = when (st) {
+            val next = when (st) {
                 TelephonyManager.EXTRA_STATE_RINGING -> CALL_RINGING
                 TelephonyManager.EXTRA_STATE_OFFHOOK -> CALL_OFFHOOK
                 else -> CALL_IDLE
             }
-            val priorStart = simCallStartedMs
-            val priorDirection = callDirection
-            val priorNumber = callNumber
-            val priorSim = callSimIdentity
-            if (newState == CALL_RINGING && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "INCOMING"; callNumber = ""; callName = "" }
-            else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) { simCallStartedMs = System.currentTimeMillis(); callDirection = "OUTGOING" }
-            else if (newState == CALL_IDLE) { simCallStartedMs = 0L; callDirection = "" }
-            val gotNumber = !num.isNullOrEmpty() && num != callNumber
-            if (!num.isNullOrEmpty()) {
-                callNumber = CallerId.asNumber(num)
-                // Contact and subscription providers run asynchronously.
+            // A delayed RINGING broadcast must not restart ringing after a confirmed answer.
+            if (next == CALL_RINGING &&
+                GatewayRingStateSync.isStaleRingingAfterAnswer(callState, currentGatewayPhoneState())) {
+                Hub.log("Ignored stale ringing broadcast after SIM call connected")
+                return
             }
-            val changed = newState != callState
-            if (changed || callSimIdentity == null) refreshPhoneDetails(newState, callNumber)
-            if (changed && newState == CALL_RINGING) callControlError = null
-            callState = newState
-            if (changed || gotNumber) {
-                Hub.log("Phone call: $newState (${logCaller()})")
-                sendCallState(if (newState == CALL_IDLE) priorStart else null)
-            }
-            if (newState == CALL_IDLE) {
-                if (changed && priorStart > 0L) {
-                    enrichCompletedSimCall(priorStart, priorDirection, priorNumber, priorSim)
-                }
-                callNumber = ""
-                callName = ""
-                callSimIdentity = null
-            }
-            Hub.notifyUi()
+            applyGatewayPhoneState(next, num)
         }
+    }
+
+    /** One state-transition path for both Android broadcasts and the ringing watchdog. */
+    private fun applyGatewayPhoneState(newState: String, num: String?) {
+        val previousState = callState
+        val priorStart = simCallStartedMs
+        val priorDirection = callDirection
+        val priorNumber = callNumber
+        val priorSim = callSimIdentity
+        if (newState == CALL_RINGING && previousState == CALL_IDLE) {
+            simCallStartedMs = System.currentTimeMillis()
+            callDirection = "INCOMING"
+            callNumber = ""
+            callName = ""
+        } else if (newState == CALL_OFFHOOK && previousState == CALL_IDLE) {
+            simCallStartedMs = System.currentTimeMillis()
+            callDirection = "OUTGOING"
+        } else if (newState == CALL_IDLE) {
+            simCallStartedMs = 0L
+            callDirection = ""
+        }
+        val gotNumber = !num.isNullOrEmpty() && CallerId.asNumber(num) != callNumber
+        if (!num.isNullOrEmpty()) callNumber = CallerId.asNumber(num)
+        val changed = newState != previousState
+        if (changed || callSimIdentity == null) refreshPhoneDetails(newState, callNumber)
+        if (changed && newState == CALL_RINGING) callControlError = null
+        callState = newState
+        scheduleGatewayPhoneStateRecheck()
+        if (changed || gotNumber) {
+            Hub.log("Phone call: $newState (${logCaller()})")
+            sendCallState(if (newState == CALL_IDLE) priorStart else null)
+        }
+        if (newState == CALL_IDLE) {
+            if (changed && priorStart > 0L) {
+                enrichCompletedSimCall(priorStart, priorDirection, priorNumber, priorSim)
+            }
+            callNumber = ""
+            callName = ""
+            callSimIdentity = null
+        }
+        Hub.notifyUi()
     }
 
     /** Android may omit EXTRA_INCOMING_NUMBER; use only the matching SIM call-log row. */
@@ -1326,6 +1385,7 @@ class LinkService : Service() {
                 Hub.log("Initial phone state: $current (details may be unavailable)")
                 sendCallState()
             }
+            scheduleGatewayPhoneStateRecheck()
         } catch (e: Exception) {
             Hub.log("Initial phone-state query unavailable: ${e.message ?: e.javaClass.simpleName}")
         }
