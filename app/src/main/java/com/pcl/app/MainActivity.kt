@@ -59,7 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private enum class MainTab { HOME, CALLS, UPDATE, SETTINGS, LOGS }
+private enum class MainTab { HOME, CALLS, UPDATE, SETTINGS }
 
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
@@ -243,7 +243,7 @@ class MainActivity : ComponentActivity() {
         var screen by remember { mutableStateOf(if (setupReady) MainTab.HOME else MainTab.SETTINGS) }
         var showingPermissions by remember { mutableStateOf(false) }
         BackHandler(enabled = showingPermissions && screen == MainTab.SETTINGS) { showingPermissions = false }
-        BackHandler(enabled = screen == MainTab.UPDATE || screen == MainTab.CALLS || screen == MainTab.LOGS) {
+        BackHandler(enabled = screen == MainTab.UPDATE || screen == MainTab.CALLS) {
             screen = if (screen == MainTab.CALLS) MainTab.HOME else MainTab.SETTINGS
         }
         val updateStatus by LiveUpdater.controller.status.collectAsState()
@@ -268,7 +268,6 @@ class MainActivity : ComponentActivity() {
                                     MainTab.HOME -> Icons.Default.Hub
                                     MainTab.CALLS -> Icons.Default.Call
                                     MainTab.UPDATE -> Icons.Default.Download
-                                    MainTab.LOGS -> Icons.Rounded.Article
                                     MainTab.SETTINGS -> if (showingPermissions) Icons.Default.CheckCircle else Icons.Default.Settings
                                 },
                                 contentDescription = null, tint = MaterialTheme.colorScheme.primary,
@@ -278,7 +277,6 @@ class MainActivity : ComponentActivity() {
                                 MainTab.HOME -> "Home"
                                 MainTab.CALLS -> "Calls"
                                 MainTab.UPDATE -> "About & updates"
-                                MainTab.LOGS -> "Logs"
                                 MainTab.SETTINGS -> if (showingPermissions) "Permissions" else "Settings"
                             }, fontWeight = FontWeight.SemiBold, maxLines = 1,
                                 overflow = TextOverflow.Ellipsis)
@@ -338,10 +336,6 @@ class MainActivity : ComponentActivity() {
                         refreshGatewayAudio = { service?.refreshGatewayAudio() },
                     ),
                     modifier = Modifier.padding(insets),
-                )
-            } else if (screen == MainTab.LOGS) {
-                PCLLogsPage(
-                    modifier = Modifier.fillMaxSize().padding(insets),
                 )
             } else Column(
                 Modifier.fillMaxSize().padding(insets).verticalScroll(rememberScrollState())
@@ -528,12 +522,7 @@ class MainActivity : ComponentActivity() {
                             },
                         )
                     }
-                    ListItem(
-                        headlineContent = { Text("Logs") },
-                        supportingContent = { Text("Persistent diagnostics and crash reports") },
-                        leadingContent = { Icon(Icons.Rounded.Article, contentDescription = null) },
-                        modifier = Modifier.clickable { screen = MainTab.LOGS },
-                    )
+                    
                     HorizontalDivider()
                     ListItem(
                         headlineContent = { Text("About & updates") },

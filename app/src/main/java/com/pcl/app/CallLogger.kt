@@ -1,35 +1,12 @@
 package com.pcl.app
-
 import android.content.Context
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import android.util.Log
 
-/** In-app activity log shown on Home. Kept in memory only; each launch starts a fresh session. */
+/** Lightweight Logcat forwarding for call-control events; no in-app log buffer. */
 object CallLogger {
-    private val lock = Any()
-    private lateinit var appContext: Context
-    private var initialized = false
-    private val _lines = MutableStateFlow<List<String>>(emptyList())
-    val lines: StateFlow<List<String>> = _lines
-
-    fun init(context: Context) {
-        appContext = context.applicationContext
-        synchronized(lock) {
-            if (initialized) return
-            initialized = true
-            // Preserve events the service logged before the Activity opened.
-            appContext.getSharedPreferences("call_activity_logs", Context.MODE_PRIVATE)
-                .edit().remove("lines").apply()
-        }
-    }
-
+    fun init(context: Context) = Unit
     fun log(message: String) {
-        val stamp = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date())
-        synchronized(lock) { _lines.value = (_lines.value + "[$stamp] $message").takeLast(100) }
+        Log.d("PCL-Call", AppLog.redact(message).replace('\n', ' ').take(1000))
     }
-
-    fun clear() = synchronized(lock) { _lines.value = emptyList() }
+    fun clear() = Unit
 }
