@@ -77,11 +77,12 @@ class PclReliabilityContractTest {
         assertTrue(source("LinkService").contains("callLogExecutor.shutdownNow()"))
     }
 
-    @Test fun loggingKeepsLiveRecordsAndSupportsRedactedPersistentDiagnostics() {
-        assertTrue(source("CallLogger").contains("if (initialized) return"))
+    @Test fun loggingUsesSanitizedLogcatWithoutPersistentDiagnostics() {
+        assertTrue(source("CallLogger").contains("Log.d("))
+        assertFalse(source("CallLogger").contains("MutableStateFlow"))
         assertTrue(source("Protocol").contains("AppLog.add(\"LINK\", redacted)"))
         assertTrue(source("Protocol").contains("android.util.Log.i(\"PCL\", redacted)"))
         assertTrue(source("Protocol").contains("CallLogger.log(redacted)"))
-        assertTrue(source("AppLog").contains("[BT_DEVICE]"))
+        assertTrue(source("AppLog").contains("Log.d("))
     }
 }
