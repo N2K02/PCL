@@ -346,6 +346,7 @@ class LinkService : Service() {
     private var lastRxSample = 0L
     private var lastTxSample = 0L
     private val trafficHandler = Handler(Looper.getMainLooper())
+    private val trafficNotificationGate = TrafficNotificationGate()
     private val trafficSampler = object : Runnable {
         override fun run() {
             if (!running) return
@@ -359,7 +360,13 @@ class LinkService : Service() {
             if (down != downloadBytesPerSecond || up != uploadBytesPerSecond) {
                 downloadBytesPerSecond = down
                 uploadBytesPerSecond = up
-                updateStatus()
+                Hub.notifyUi() // The foreground UI keeps its 3-second samples.
+            }
+            // Rebuilding system notifications on every sample churns SystemUI.
+            // Connection and call-state changes still use immediate updateStatus().
+            if (connected && trafficNotificationGate.shouldPublish(
+                    SystemClock.elapsedRealtime(), down, up)) {
+                runCatching { nm.notify(ID_STATUS, statusNotification()) }
             }
             trafficHandler.postDelayed(this, TRAFFIC_SAMPLE_MS)
         }
@@ -590,6 +597,7 @@ class LinkService : Service() {
         connectionState = "Starting…"
         rxTotal.set(0L); txTotal.set(0L); lastRxSample = 0L; lastTxSample = 0L
         downloadBytesPerSecond = 0L; uploadBytesPerSecond = 0L
+        trafficNotificationGate.reset()
         try {
             goForeground()
         } catch (e: Exception) {
