@@ -18,9 +18,6 @@ object Prefs {
     /** The other phone: the Gateway on a Remote, and the only allowed Remote on a Gateway. */
     const val PEER_DEVICE = "device"
 
-    /** Gateway: mirror notifications to the Remote. */
-    const val MIRROR = "mirror"
-
     /** True while the user wants the link running, so PCL restarts after a reboot, update or system kill. */
     const val LINK_ENABLED = "link_enabled"
 

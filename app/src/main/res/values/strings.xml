@@ -1,5 +1,3 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_label">PCL WhatsApp call helper</string>
-    <string name="accessibility_description">Optional, Gateway phone only. When you start a WhatsApp call from the Remote phone, PCL opens WhatsApp on this phone and, when needed, taps the call button in that contact\'s chat. It only looks at WhatsApp, and only for a few seconds after each request. PCL never reads, answers or rejects calls through this service.</string>
 </resources>

@@ -45,6 +45,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Test public version resolution
+        run: bash .github/scripts/test-public-version.sh
+
       - name: Work out version and release notes
         env:
           REQUESTED: ${{ github.event.inputs.version }}
@@ -53,7 +56,8 @@ jobs:
           # Latest release tag of the form vMAJOR.MINOR (v1.9, v2.0, ...).
           # Preserve the highest installed release lineage from source or public distribution.
           local_last=$(git tag -l 'v[0-9]*' | grep -E '^v[0-9]+[.][0-9]$' | sort -V | tail -1 || true)
-          public_last=$(gh api 'repos/N2K02/n2k02.github.io/releases?per_page=100' --jq '.[].tag_name' 2>/dev/null | sed -nE 's/^pcl-v([0-9]+[.][0-9])(-build-[0-9]+)?$/v\1/p' | sort -V | tail -1 || true)
+          # Read the full public version tag history, not the first 100 shared releases.
+          public_last=$(bash .github/scripts/latest-public-version.sh pcl)
           last=$(printf '%s\n%s\n' "$local_last" "$public_last" | sort -V | tail -1)
           if [ -n "$REQUESTED" ]; then
             echo "$REQUESTED" | grep -Eq '^[0-9]+\.[0-9]$' || { echo "::error::Version must look like 1.0"; exit 1; }
@@ -68,6 +72,12 @@ jobs:
           if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
             echo "::error::Release v$ver already exists; choose the next version."
             exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ] && [ -n "$last" ]; then
+            max=$(printf '%s\n%s\n' "$last" "v$ver" | sort -V | tail -1)
+            if [ "$max" != "v$ver" ] || [ "$last" = "v$ver" ]; then
+              echo "::error::Release v$ver must advance past $last"; exit 1
+            fi
           fi
           echo "VERSION=$ver" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$(( 100000 + GITHUB_RUN_NUMBER ))" >> "$GITHUB_ENV"
@@ -98,14 +108,74 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
-      - name: Build APK
+      - name: Restore encrypted signing keystore
+        env:
+          SIGNING_KEYSTORE_ENC_BASE64: ${{ secrets.SIGNING_KEYSTORE_ENC_BASE64 }}
+          SIGNING_PASSPHRASE: ${{ secrets.SIGNING_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -s signing/keys.tar.enc ]; then
+            : "${SIGNING_PASSPHRASE:?SIGNING_PASSPHRASE is required to decrypt signing/keys.tar.enc}"
+            umask 077
+            mkdir -p "$RUNNER_TEMP/signing"
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+              -pass env:SIGNING_PASSPHRASE -in signing/keys.tar.enc |
+              tar -xf - -C "$RUNNER_TEMP/signing"
+            test -s "$RUNNER_TEMP/signing/old.keystore"
+            if [ -f app/debug.keystore ]; then
+              cmp -s app/debug.keystore "$RUNNER_TEMP/signing/old.keystore" ||
+                { echo "::error::Signing bundle differs from current certificate"; exit 1; }
+            fi
+            cp "$RUNNER_TEMP/signing/old.keystore" app/debug.keystore
+            echo "Using the verified encrypted signing bundle"
+          elif [ -n "$SIGNING_KEYSTORE_ENC_BASE64" ]; then
+            if [ -z "$SIGNING_PASSPHRASE" ]; then
+              echo "::error::SIGNING_PASSPHRASE must be provided when encrypted keystore is configured"
+              exit 1
+            fi
+            # Encryption: openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -salt.
+            # Decrypt to the same path used by the established release signing config.
+            umask 077
+            printf '%s' "$SIGNING_KEYSTORE_ENC_BASE64" | base64 --decode |
+              openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 \
+                -pass env:SIGNING_PASSPHRASE -out "$RUNNER_TEMP/restored-signing.keystore"
+            test -s "$RUNNER_TEMP/restored-signing.keystore"
+            # Until the plaintext repository key is removed, require byte-for-byte
+            # equality so a different certificate cannot disrupt installed updates.
+            if [ -f app/debug.keystore ]; then
+              cmp -s app/debug.keystore "$RUNNER_TEMP/restored-signing.keystore" ||
+                { echo "::error::Encrypted keystore does not match existing signing identity"; exit 1; }
+            fi
+            cp "$RUNNER_TEMP/restored-signing.keystore" app/debug.keystore
+            echo "Encrypted signing material restored and validated"
+          else
+            # Temporary backwards-compatible path until migration secrets are configured.
+            test -s app/debug.keystore || { echo "::error::Signing keystore missing"; exit 1; }
+            echo "::warning::Legacy repository keystore in use. Configure SIGNING_KEYSTORE_ENC_BASE64 and SIGNING_PASSPHRASE to complete encrypted signing migration."
+          fi
+
+      - name: Test and build APK
         run: |
           echo "Android SDK: ${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
           yes | "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
           chmod +x gradlew
           set -o pipefail
-          ./gradlew --no-daemon assembleDebug -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
-          cp app/build/outputs/apk/debug/app-debug.apk "$APP-$VERSION.apk"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            VARIANT=Debug
+            OUTPUT=debug/app-debug.apk
+          else
+            VARIANT=Release
+            OUTPUT=release/app-release.apk
+          fi
+          # Validate release R8/shrinking even on experimental PRs. A debug-only
+          # build can pass while the eventual minified main-branch release fails.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            ./gradlew --no-daemon testDebugUnitTest assembleDebug assembleRelease -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
+          else
+            ./gradlew --no-daemon testDebugUnitTest assembleRelease -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
+          fi
+          cp "app/build/outputs/apk/$OUTPUT" "$APP-$VERSION.apk"
 
       - name: Publish APK release
         if: github.event_name != 'pull_request'
