@@ -14,8 +14,8 @@ class UpdaterVersionContractTest {
 
     @Test fun experimentalUsesCompactUpdater() {
         val gradle = projectFile("app/build.gradle.kts").readText()
-        assertTrue("Use the compact updater", gradle.contains("dev.n2k02:updater:0.1.19"))
-        assertFalse("The legacy updater must not return", gradle.contains("dev.n2k02:updater:0.1.18"))
+        assertTrue("Use the compact updater", gradle.contains("dev.n2k02:updater:0.1.20"))
+        assertFalse("The legacy updater must not return", gradle.contains("dev.n2k02:updater:0.1.19"))
     }
 
     @Test fun hostOwnsTheUpdatePageTitle() {
