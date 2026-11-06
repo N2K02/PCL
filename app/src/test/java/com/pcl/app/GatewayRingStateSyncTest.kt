@@ -79,7 +79,7 @@ class GatewayRingStateSyncTest {
         val transition = src.substringAfter("private fun applyGatewayPhoneState(")
             .substringBefore("private fun recoverRecentSimNumber(")
         val send = transition.indexOf("sendCallState(if (newState == CALL_IDLE) priorStart else null)")
-        val logging = transition.indexOf("Hub.log(\"Phone call: $newState")
+        val logging = transition.indexOf("Hub.log(\"Phone call: " + "$" + "newState")
         assertTrue("State must be sent before potentially slow diagnostics", send >= 0 && logging > send)
         val remote = src.substringAfter("private fun onRemoteCallUpdate(")
             .substringBefore("private fun showOngoingCall(")
