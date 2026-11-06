@@ -37,6 +37,7 @@ import android.provider.ContactsContract
 import android.provider.Settings
 import android.telecom.TelecomManager
 import android.telephony.TelephonyManager
+import android.telephony.TelephonyCallback
 import android.util.Base64
 import android.util.Log
 import java.io.BufferedInputStream
@@ -493,7 +494,7 @@ class LinkService : Service() {
                     SystemClock.elapsedRealtime(), down, up)) {
                 runCatching { nm.notify(ID_STATUS, statusNotification()) }
             }
-            trafficHandler.postDelayed(this, TRAFFIC_SAMPLE_MS)
+            trafficHandler.postDelayed(this, LinkTrafficPolicy.nextIntervalMs(connected))
         }
     }
 
@@ -555,6 +556,7 @@ class LinkService : Service() {
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(8))
     private val pendingCallLogTasks = mutableSetOf<Runnable>()
     private var receiverRegistered = false
+    private var gatewayTelephonyCallback: TelephonyCallback? = null
     private var ringtone: Ringtone? = null
     private var callWaitingSeen = false
     private var multipleActiveSimCalls = false
@@ -1138,6 +1140,7 @@ class LinkService : Service() {
             }
             receiverRegistered = false
         }
+        unregisterGatewayCallStateCallback()
         nm.cancel(ID_INCOMING)
         stopForeground(STOP_FOREGROUND_REMOVE)
         connectionState = "Stopped"
@@ -1462,10 +1465,24 @@ class LinkService : Service() {
     }
 
     private fun setConn(isConnected: Boolean, text: String) {
+        val changed = connected != isConnected
         connected = isConnected
         connectionState = text
         Hub.log(text)
         updateStatus()
+        if (changed && running) {
+            // This service often waits for a Bluetooth peer while disconnected.
+            // Stop waking every 5s during that wait; on reconnection immediately
+            // reset the byte baseline and restore the original 5s sampling rate.
+            trafficHandler.removeCallbacks(trafficSampler)
+            trafficHandler.post {
+                lastRxSample = rxTotal.get()
+                lastTxSample = txTotal.get()
+                trafficHandler.removeCallbacks(trafficSampler)
+                if (running) trafficHandler.postDelayed(
+                    trafficSampler, LinkTrafficPolicy.nextIntervalMs(isConnected))
+            }
+        }
     }
 
     // ---------------------------------------------------------------- gateway: SIM calls
@@ -1614,8 +1631,11 @@ class LinkService : Service() {
         callState = newState
         scheduleGatewayPhoneStateRecheck()
         if (changed || gotNumber) {
-            Hub.log("Phone call: $newState (${logCaller()})")
+            // Queue the authoritative call transition ahead of disk logging,
+            // UI updates and metadata enrichment. The Remote stops its ringtone
+            // immediately upon receiving OFFHOOK/IDLE.
             sendCallState(if (newState == CALL_IDLE) priorStart else null)
+            Hub.log("Phone call: $newState (${logCaller()})")
         }
         if (newState == CALL_IDLE) {
             if (changed && priorStart > 0L) {
@@ -1657,7 +1677,52 @@ class LinkService : Service() {
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun registerGatewayCallStateCallback() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
+            gatewayTelephonyCallback != null ||
+            !has(Manifest.permission.READ_PHONE_STATE)) return
+        val telephony = getSystemService(TelephonyManager::class.java) ?: return
+        val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+            override fun onCallStateChanged(state: Int) {
+                if (!running || role != ROLE_GATEWAY) return
+                val observed = when (state) {
+                    TelephonyManager.CALL_STATE_RINGING -> CALL_RINGING
+                    TelephonyManager.CALL_STATE_OFFHOOK -> CALL_OFFHOOK
+                    TelephonyManager.CALL_STATE_IDLE -> CALL_IDLE
+                    else -> return
+                }
+                // Never let a delayed RINGING event reactivate the Remote ring
+                // after OFFHOOK is already authoritative on this phone.
+                if (observed == CALL_RINGING &&
+                    GatewayRingStateSync.isStaleRingingAfterAnswer(
+                        callState, currentGatewayPhoneState())) return
+                applyGatewayPhoneState(observed, null)
+            }
+        }
+        try {
+            telephony.registerTelephonyCallback(mainExecutor, callback)
+            gatewayTelephonyCallback = callback
+        } catch (e: SecurityException) {
+            Hub.log("Direct SIM state callbacks unavailable: permission denied")
+        } catch (e: RuntimeException) {
+            Hub.log("Direct SIM state callbacks unavailable: ${e.javaClass.simpleName}")
+        }
+    }
+
+    private fun unregisterGatewayCallStateCallback() {
+        val callback = gatewayTelephonyCallback ?: return
+        gatewayTelephonyCallback = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) runCatching {
+            getSystemService(TelephonyManager::class.java)
+                ?.unregisterTelephonyCallback(callback)
+        }
+    }
+
     private fun registerPhoneReceiver() {
+        // TelephonyCallback (Android 12+) can deliver OFFHOOK sooner than
+        // ACTION_PHONE_STATE_CHANGED. Keep the receiver as an OEM fallback.
+        registerGatewayCallStateCallback()
         if (receiverRegistered) return
         val f = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
         try {

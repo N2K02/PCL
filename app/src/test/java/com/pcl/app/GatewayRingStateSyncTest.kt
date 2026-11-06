@@ -67,6 +67,26 @@ class GatewayRingStateSyncTest {
         assertTrue(service.contains("role == ROLE_REMOTE && callState == CALL_RINGING && !callControlsRestricted"))
     }
 
+
+    @Test fun gatewayAnswerStateUsesDirectTelephonyCallbackAndUrgentPacketOrdering() {
+        val path = "app/src/main/java/com/pcl/app/LinkService.kt"
+        val src = listOf(File(path), File("../$path")).first { it.isFile }.readText()
+        assertTrue(src.contains("TelephonyCallback.CallStateListener"))
+        assertTrue(src.contains("telephony.registerTelephonyCallback(mainExecutor, callback)"))
+        assertTrue(src.contains("registerGatewayCallStateCallback()"))
+        assertTrue(src.contains("unregisterGatewayCallStateCallback()"))
+        assertTrue(src.contains("TelephonyManager.CALL_STATE_OFFHOOK -> CALL_OFFHOOK"))
+        val transition = src.substringAfter("private fun applyGatewayPhoneState(")
+            .substringBefore("private fun recoverRecentSimNumber(")
+        val send = transition.indexOf("sendCallState(if (newState == CALL_IDLE) priorStart else null)")
+        val logging = transition.indexOf("Hub.log(\"Phone call: " + "$" + "newState")
+        assertTrue("State must be sent before potentially slow diagnostics", send >= 0 && logging > send)
+        val remote = src.substringAfter("private fun onRemoteCallUpdate(")
+            .substringBefore("private fun showOngoingCall(")
+        assertTrue(remote.contains("CALL_OFFHOOK -> {\\n                stopSimRinging()".replace("\\n", "\n")))
+        assertTrue(remote.contains("else -> {\\n                simCallHere = false".replace("\\n", "\n")))
+    }
+
     @Test fun serviceStopsRingBeforeWritingHistoryAndCancelsWatchdogOnQuit() {
         val path = "app/src/main/java/com/pcl/app/LinkService.kt"
         val service = listOf(File(path), File("../$path")).first { it.isFile }.readText()
