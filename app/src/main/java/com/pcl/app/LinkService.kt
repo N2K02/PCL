@@ -493,7 +493,7 @@ class LinkService : Service() {
                     SystemClock.elapsedRealtime(), down, up)) {
                 runCatching { nm.notify(ID_STATUS, statusNotification()) }
             }
-            trafficHandler.postDelayed(this, TRAFFIC_SAMPLE_MS)
+            trafficHandler.postDelayed(this, LinkTrafficPolicy.nextIntervalMs(connected))
         }
     }
 
@@ -1462,10 +1462,24 @@ class LinkService : Service() {
     }
 
     private fun setConn(isConnected: Boolean, text: String) {
+        val changed = connected != isConnected
         connected = isConnected
         connectionState = text
         Hub.log(text)
         updateStatus()
+        if (changed && running) {
+            // This service often waits for a Bluetooth peer while disconnected.
+            // Stop waking every 5s during that wait; on reconnection immediately
+            // reset the byte baseline and restore the original 5s sampling rate.
+            trafficHandler.removeCallbacks(trafficSampler)
+            trafficHandler.post {
+                lastRxSample = rxTotal.get()
+                lastTxSample = txTotal.get()
+                trafficHandler.removeCallbacks(trafficSampler)
+                if (running) trafficHandler.postDelayed(
+                    trafficSampler, LinkTrafficPolicy.nextIntervalMs(isConnected))
+            }
+        }
     }
 
     // ---------------------------------------------------------------- gateway: SIM calls
