@@ -97,6 +97,7 @@ jobs:
 
           {
             echo "## $APP $ver"
+            echo "Version code: $((100000 + GITHUB_RUN_NUMBER))"
             echo
             echo "### What's new"
             echo "$changes"
