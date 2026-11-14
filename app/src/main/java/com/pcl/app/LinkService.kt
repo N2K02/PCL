@@ -2095,7 +2095,7 @@ class LinkService : Service() {
         // updated in place when the Gateway call is answered or connects.
         val connectedAt = CallHistory.connectedSince
         val n = Notification.Builder(this, CH_CALLS)
-            .setSmallIcon(android.R.drawable.sym_action_call)
+            .setSmallIcon(com.pcl.app.R.drawable.ic_stat_app)
             .setContentTitle("Call in progress")
             .setContentText(display())
             .setSubText("on the Gateway")
@@ -2285,7 +2285,7 @@ class LinkService : Service() {
     private fun statusNotification(): Notification {
         val text = if (connected) "$connectionState · Down ${formatTrafficRate(downloadBytesPerSecond)} / Up ${formatTrafficRate(uploadBytesPerSecond)}" else "$connectionState · Down/Up rates unavailable while disconnected"
         return Notification.Builder(this, CH_STATUS)
-            .setSmallIcon(android.R.drawable.sym_action_call)
+            .setSmallIcon(com.pcl.app.R.drawable.ic_stat_app)
             .setContentTitle(if (role == ROLE_GATEWAY) "PCL · Gateway" else "PCL · Remote")
             .setContentText(text)
             .setOngoing(true)
@@ -2321,7 +2321,7 @@ class LinkService : Service() {
             return
         }
         val n = Notification.Builder(this, CH_CALLS)
-            .setSmallIcon(android.R.drawable.sym_call_incoming)
+            .setSmallIcon(com.pcl.app.R.drawable.ic_stat_app)
             .setContentTitle("Incoming call")
             .setContentText(display())
             .setCategory(Notification.CATEGORY_CALL)
