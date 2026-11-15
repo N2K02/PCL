@@ -114,6 +114,16 @@ jobs:
           } > release-notes.md
           cat release-notes.md
 
+
+      - name: Resolve standardized experimental release name
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/experimental_naming.py --self-test
+          python3 .github/scripts/experimental_naming.py "$GITHUB_REPOSITORY" "$APP" "$GITHUB_RUN_NUMBER" "$PR_NUMBER"
       - name: Restore encrypted signing keystore
         env:
           SIGNING_KEYSTORE_ENC_BASE64: ${{ secrets.SIGNING_KEYSTORE_ENC_BASE64 }}
@@ -181,7 +191,7 @@ jobs:
           else
             ./gradlew --no-daemon testDebugUnitTest assembleRelease -PappVersion="$VERSION" -PappVersionCode="$VERSION_CODE" -PappVersionSuffix="$VERSION_SUFFIX"
           fi
-          cp "app/build/outputs/apk/$OUTPUT" "$APP-$VERSION.apk"
+          cp "app/build/outputs/apk/$OUTPUT" "${APK_NAME:-$APP-$VERSION}.apk"
 
       - name: Publish APK release
         if: github.event_name != 'pull_request'
@@ -205,10 +215,10 @@ jobs:
           TAG="experimental-pr-$PR_NUMBER-run-$GITHUB_RUN_NUMBER"
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Experimental release $TAG already exists (workflow rerun); updating its APK."
-            gh release upload "$TAG" "$APP-$VERSION.apk" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" "${APK_NAME:-$APP-$VERSION}.apk" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "$APP-$VERSION.apk" \
+            gh release create "$TAG" "${APK_NAME:-$APP-$VERSION}.apk" \
               --repo "$GITHUB_REPOSITORY" --target "$PR_HEAD_SHA" \
-              --title "$APP experimental · PR #$PR_NUMBER · build $GITHUB_RUN_NUMBER" \
+              --title "$EXPERIMENTAL_TITLE" \
               --notes-file release-notes.md --prerelease --latest=false
           fi
