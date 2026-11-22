@@ -11,6 +11,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
@@ -29,6 +30,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -36,8 +38,9 @@ import android.provider.CallLog
 import android.provider.ContactsContract
 import android.provider.Settings
 import android.telecom.TelecomManager
-import android.telephony.TelephonyManager
+import android.telephony.SubscriptionManager
 import android.telephony.TelephonyCallback
+import android.telephony.TelephonyManager
 import android.util.Base64
 import android.util.Log
 import java.io.BufferedInputStream
@@ -556,8 +559,31 @@ class LinkService : Service() {
         1, 1, 0L, TimeUnit.MILLISECONDS, ArrayBlockingQueue<Runnable>(8))
     private val pendingCallLogTasks = mutableSetOf<Runnable>()
     private var receiverRegistered = false
-    private var gatewayTelephonyCallback: TelephonyCallback? = null
+    private val gatewayCallCallbacks = mutableMapOf<Int, Pair<TelephonyManager, TelephonyCallback>>()
+    private var gatewaySubscriptionsListener: SubscriptionManager.OnSubscriptionsChangedListener? = null
+    private var bluetoothReceiverRegistered = false
+    @Volatile private var peerRefreshesCallState = false
+    @Volatile private var remoteAlertExpired = false
+    private val ringingLock = Any()
+    private var ringDeadline: RemoteRingDeadline? = null
+    private var ringWakeLock: PowerManager.WakeLock? = null
     private var ringtone: Ringtone? = null
+
+    private val remoteRingCheck = object : Runnable {
+        override fun run() {
+            synchronized(ringingLock) {
+                val deadline = ringDeadline ?: return
+                val now = SystemClock.elapsedRealtime()
+                if (!running || !connected || deadline.expired(now)) {
+                    clearRemoteIncomingAlert()
+                    Hub.log("Remote ringing stopped: Gateway state no longer confirmed")
+                } else {
+                    if (deadline.refreshSupported) send("CALL_STATE_QUERY")
+                    trafficHandler.postDelayed(this, deadline.nextCheckIn(now))
+                }
+            }
+        }
+    }
     private var callWaitingSeen = false
     private var multipleActiveSimCalls = false
     @Volatile var callControlsRestricted = false
@@ -718,13 +744,15 @@ class LinkService : Service() {
         // Establish a generation before scheduling background provider reads.
         startWorker()
         if (role == ROLE_GATEWAY) registerPhoneReceiver()
+        else registerBluetoothDisconnectReceiver()
     }
 
     // ---------------------------------------------------------------- public actions (UI)
 
     /** A lock-screen action is valid only for the call that opened that screen. */
     fun currentIncomingToken(): Long? = activeCallToken.takeIf {
-        role == ROLE_REMOTE && callState == CALL_RINGING && !callControlsRestricted
+        role == ROLE_REMOTE && connected && callState == CALL_RINGING &&
+            !callControlsRestricted && !remoteAlertExpired
     }
 
     fun answerForCall(token: Long?) {
@@ -1036,23 +1064,25 @@ class LinkService : Service() {
             helloReceived = false
             peerProtocol = null
             peerAppVersion = ""
+            peerRefreshesCallState = false
             clearPendingCall()
             // The Gateway's first CALL after a fresh Remote session is a snapshot,
             // not evidence of a newly started ringing or outgoing call. This also
             // protects process recreation where no disconnect callback ran.
             if (role == ROLE_REMOTE) CallHistory.onLinkLost()
-            send("HELLO", role, Protocol.VERSION.toString(), appVersion)
+            send("HELLO", role, Protocol.VERSION.toString(), appVersion, Protocol.CALL_STATE_REFRESH)
             if (role == ROLE_GATEWAY) {
                 sendCallState()
                 sendContactsFingerprint()
             }
             val input = DataInputStream(BufferedInputStream(s.inputStream, 16384))
-            while (alive(gen)) {
+            while (alive(gen) && connected && socket === s) {
                 val type = input.readUnsignedByte()
                 val len = input.readInt()
                 if (len < 0 || len > Protocol.MAX_FRAME) throw IOException("bad data from peer")
                 val data = ByteArray(len)
                 input.readFully(data)
+                if (!alive(gen) || !connected || socket !== s) break
                 rxTotal.addAndGet(len.toLong() + 5L)
                 when (type) {
                     Protocol.TYPE_CMD -> handleCommand(String(data, Charsets.UTF_8))
@@ -1077,7 +1107,7 @@ class LinkService : Service() {
                 if (role == ROLE_REMOTE) {
                     if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
                     clearPendingCall()
-                    stopRinging()
+                    clearRemoteIncomingAlert()
                     CallHistory.onLinkLost()
                     callState = CALL_IDLE
                     activeCallToken = null
@@ -1090,9 +1120,52 @@ class LinkService : Service() {
                     simCallHere = false
                     simCallOnGateway = false
                     simDialAt = 0L
-                    nm.cancel(ID_INCOMING)
                 }
             }
+        }
+    }
+
+    private val bluetoothDisconnectReceiver = object : BroadcastReceiver() {
+        @SuppressLint("MissingPermission")
+        @Suppress("DEPRECATION")
+        override fun onReceive(context: Context, intent: Intent) {
+            val session = socket ?: return
+            if (!running || role != ROLE_REMOTE || !connected) return
+            val lost = when (intent.action) {
+                BluetoothAdapter.ACTION_STATE_CHANGED -> intent.getIntExtra(
+                    BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR
+                ) in setOf(BluetoothAdapter.STATE_TURNING_OFF, BluetoothAdapter.STATE_OFF)
+                BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
+                    // RFCOMM uses classic Bluetooth; a separate LE link may disconnect first.
+                    val isLe = Build.VERSION.SDK_INT >= 33 && intent.getIntExtra(
+                        BluetoothDevice.EXTRA_TRANSPORT, BluetoothDevice.TRANSPORT_AUTO
+                    ) == BluetoothDevice.TRANSPORT_LE
+                    val device = intent.getParcelableExtra<BluetoothDevice>(BluetoothDevice.EXTRA_DEVICE)
+                    !isLe && device == session.remoteDevice
+                }
+                else -> false
+            }
+            if (!lost || socket !== session) return
+            connected = false
+            clearRemoteIncomingAlert()
+            Hub.log("Selected Bluetooth link disconnected")
+            runCatching { session.close() }
+        }
+    }
+
+    private fun registerBluetoothDisconnectReceiver() {
+        val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED).apply {
+            addAction(BluetoothDevice.ACTION_ACL_DISCONNECTED)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= 33) {
+                registerReceiver(bluetoothDisconnectReceiver, filter, Context.RECEIVER_EXPORTED)
+            } else {
+                registerReceiver(bluetoothDisconnectReceiver, filter)
+            }
+            bluetoothReceiverRegistered = true
+        } catch (e: RuntimeException) {
+            Hub.log("Bluetooth disconnect broadcasts unavailable: ${e.javaClass.simpleName}")
         }
     }
 
@@ -1107,7 +1180,14 @@ class LinkService : Service() {
     private fun shutdown() {
         if (!running && worker == null) return
         running = false
-        if (role == ROLE_REMOTE) CallHistory.onLinkLost()
+        if (role == ROLE_REMOTE) {
+            clearRemoteIncomingAlert()
+            CallHistory.onLinkLost()
+        }
+        if (bluetoothReceiverRegistered) {
+            runCatching { unregisterReceiver(bluetoothDisconnectReceiver) }
+            bluetoothReceiverRegistered = false
+        }
         pendingCallLogTasks.forEach(trafficHandler::removeCallbacks)
         pendingCallLogTasks.clear()
         callLogExecutor.queue.clear()
@@ -1207,6 +1287,7 @@ class LinkService : Service() {
             "HELLO" -> {
                 peerProtocol = p.getOrNull(2)?.toIntOrNull()
                 peerAppVersion = p.getOrNull(3).orEmpty().take(20)
+                peerRefreshesCallState = p.getOrNull(4) == Protocol.CALL_STATE_REFRESH
                 helloReceived = CallControlProtocol.peerRoleMatches(role, arg1)
                 Hub.log("Peer is the $arg1 phone (PCL ${peerAppVersion.ifEmpty { "older version" }})")
                 versionWarning?.let { Hub.log("Version mismatch: $it") }
@@ -1229,6 +1310,19 @@ class LinkService : Service() {
                 val previousState = callState
                 val nextState = arg1.takeIf { it in setOf(CALL_IDLE, CALL_RINGING, CALL_OFFHOOK) } ?: return
                 val nextToken = p.getOrNull(9)?.toLongOrNull()?.takeIf { it > 0L }
+                val restricted = p.getOrNull(10) == "1"
+                val refresh = p.getOrNull(11) == "1"
+                if (refresh && previousState == CALL_RINGING && nextState == CALL_RINGING &&
+                    nextToken == activeCallToken && restricted == callControlsRestricted) {
+                    synchronized(ringingLock) { ringDeadline?.confirm(SystemClock.elapsedRealtime()) }
+                    return
+                }
+                val newRing = nextState == CALL_RINGING &&
+                    (previousState != CALL_RINGING || nextToken != activeCallToken)
+                if (newRing) {
+                    stopSimRinging()
+                    remoteAlertExpired = false
+                }
                 if (nextState != CALL_IDLE && activeCallToken != null && nextToken != null &&
                     activeCallToken != nextToken && pendingCallToken != null) {
                     callControlError = "FAILED: Call changed before Gateway confirmation"
@@ -1238,12 +1332,11 @@ class LinkService : Service() {
                 callState = nextState
                 activeCallToken = if (nextState == CALL_IDLE) null else nextToken
                 val wasRestricted = callControlsRestricted
-                callControlsRestricted = p.getOrNull(10) == "1"
-                // When Android cannot identify which SIM call is active, discard
-                // the uncertain tracker timeline rather than invent a missed call.
-                if (callControlsRestricted && !wasRestricted) CallHistory.onLinkLost()
+                callControlsRestricted = restricted
                 // Stop the ringtone before potentially slow synchronous call-history I/O.
                 if (callState != CALL_RINGING || callControlsRestricted) stopSimRinging()
+                // Under SIM ambiguity, discard the uncertain tracker timeline.
+                if (callControlsRestricted && !wasRestricted) CallHistory.onLinkLost()
                 if (callState == CALL_RINGING && pendingCallCommand == null) callControlError = null
                 callNumber = CallerId.asNumber(p.getOrElse(2) { "" })
                 val receivedName = p.getOrElse(3) { "" }.trim()
@@ -1276,7 +1369,7 @@ class LinkService : Service() {
                     pendingDeclineRecord = savedCall
                 }
 
-                onRemoteCallUpdate(previousState)
+                onRemoteCallUpdate(previousState, newRing)
                 confirmCallState()
             }
             "CALL_LOGGED" -> {
@@ -1325,6 +1418,20 @@ class LinkService : Service() {
             }
             "SYNC_CONTACTS" -> sendContacts()
             "AUDIO_QUERY" -> gatewayAudioStatus()
+            "CALL_STATE_QUERY" -> {
+                if (!peerRefreshesCallState) return
+                val session = writer
+                trafficHandler.post {
+                    if (running && connected && session != null && writer === session) {
+                        val observed = currentGatewayPhoneState() ?: return@post
+                        when {
+                            observed == callState -> sendCallState(refresh = true)
+                            callState != CALL_IDLE || observed == CALL_RINGING ->
+                                applyGatewayPhoneState(observed, null)
+                        }
+                    }
+                }
+            }
             "AUDIO_MODE" -> if (gatewayAudioCommandAllowed(p.getOrNull(3), "MODE",
                     p.getOrNull(2).orEmpty())) gatewaySetVolumeMode(arg1, p.getOrNull(2).orEmpty())
             "AUDIO_VOLUME" -> if (gatewayAudioCommandAllowed(p.getOrNull(3), "VOLUME",
@@ -1680,42 +1787,81 @@ class LinkService : Service() {
     @SuppressLint("MissingPermission")
     private fun registerGatewayCallStateCallback() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S ||
-            gatewayTelephonyCallback != null ||
             !has(Manifest.permission.READ_PHONE_STATE)) return
-        val telephony = getSystemService(TelephonyManager::class.java) ?: return
-        val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
-            override fun onCallStateChanged(state: Int) {
-                if (!running || role != ROLE_GATEWAY) return
-                val observed = when (state) {
-                    TelephonyManager.CALL_STATE_RINGING -> CALL_RINGING
-                    TelephonyManager.CALL_STATE_OFFHOOK -> CALL_OFFHOOK
-                    TelephonyManager.CALL_STATE_IDLE -> CALL_IDLE
-                    else -> return
+        val subscriptions = getSystemService(SubscriptionManager::class.java)
+        if (gatewaySubscriptionsListener == null && subscriptions != null) {
+            val listener = object : SubscriptionManager.OnSubscriptionsChangedListener() {
+                override fun onSubscriptionsChanged() {
+                    if (running && role == ROLE_GATEWAY && gatewaySubscriptionsListener === this) {
+                        refreshGatewayCallCallbacks()
+                    }
                 }
-                // Never let a delayed RINGING event reactivate the Remote ring
-                // after OFFHOOK is already authoritative on this phone.
-                if (observed == CALL_RINGING &&
-                    GatewayRingStateSync.isStaleRingingAfterAnswer(
-                        callState, currentGatewayPhoneState())) return
-                applyGatewayPhoneState(observed, null)
+            }
+            try {
+                subscriptions.addOnSubscriptionsChangedListener(mainExecutor, listener)
+                gatewaySubscriptionsListener = listener
+            } catch (e: RuntimeException) {
+                Hub.log("SIM subscription monitoring unavailable: ${e.javaClass.simpleName}")
             }
         }
-        try {
-            telephony.registerTelephonyCallback(mainExecutor, callback)
-            gatewayTelephonyCallback = callback
-        } catch (e: SecurityException) {
-            Hub.log("Direct SIM state callbacks unavailable: permission denied")
-        } catch (e: RuntimeException) {
-            Hub.log("Direct SIM state callbacks unavailable: ${e.javaClass.simpleName}")
+        refreshGatewayCallCallbacks()
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.S)
+    @SuppressLint("MissingPermission")
+    private fun refreshGatewayCallCallbacks() {
+        val telephony = getSystemService(TelephonyManager::class.java) ?: return
+        val subscriptionIds = runCatching {
+            getSystemService(SubscriptionManager::class.java)?.activeSubscriptionInfoList.orEmpty()
+                .map { it.subscriptionId }.toSet()
+        }.getOrDefault(emptySet()).ifEmpty { setOf(SubscriptionManager.INVALID_SUBSCRIPTION_ID) }
+        for (id in gatewayCallCallbacks.keys.toList()) {
+            if (id !in subscriptionIds) {
+                val (manager, callback) = gatewayCallCallbacks.remove(id) ?: continue
+                runCatching { manager.unregisterTelephonyCallback(callback) }
+            }
+        }
+        for (id in subscriptionIds - gatewayCallCallbacks.keys) {
+            val manager = if (id == SubscriptionManager.INVALID_SUBSCRIPTION_ID) telephony
+                else telephony.createForSubscriptionId(id)
+            val callback = object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                override fun onCallStateChanged(state: Int) {
+                    if (!running || role != ROLE_GATEWAY || gatewayCallCallbacks[id]?.second !== this) return
+                    val observed = when (state) {
+                        TelephonyManager.CALL_STATE_RINGING -> CALL_RINGING
+                        TelephonyManager.CALL_STATE_OFFHOOK -> CALL_OFFHOOK
+                        TelephonyManager.CALL_STATE_IDLE -> CALL_IDLE
+                        else -> return
+                    }
+                    // A callback from one SIM must never end or answer a call on another SIM.
+                    val aggregate = currentGatewayPhoneState()
+                    if (GatewayRingStateSync.acceptsSubscriptionState(observed, aggregate)) {
+                        applyGatewayPhoneState(observed, null)
+                    }
+                }
+            }
+            try {
+                manager.registerTelephonyCallback(mainExecutor, callback)
+                gatewayCallCallbacks[id] = manager to callback
+            } catch (e: RuntimeException) {
+                Hub.log("Direct SIM state callback unavailable: ${e.javaClass.simpleName}")
+            }
         }
     }
 
     private fun unregisterGatewayCallStateCallback() {
-        val callback = gatewayTelephonyCallback ?: return
-        gatewayTelephonyCallback = null
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) runCatching {
-            getSystemService(TelephonyManager::class.java)
-                ?.unregisterTelephonyCallback(callback)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        gatewaySubscriptionsListener?.let { listener ->
+            runCatching {
+                getSystemService(SubscriptionManager::class.java)
+                    ?.removeOnSubscriptionsChangedListener(listener)
+            }
+        }
+        gatewaySubscriptionsListener = null
+        val callbacks = gatewayCallCallbacks.values.toList()
+        gatewayCallCallbacks.clear()
+        for ((manager, callback) in callbacks) {
+            runCatching { manager.unregisterTelephonyCallback(callback) }
         }
     }
 
@@ -1881,7 +2027,7 @@ class LinkService : Service() {
             android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE), Charsets.UTF_8)
     } catch (_: Exception) { "" }
 
-    private fun sendCallState(completedStart: Long? = null) {
+    private fun sendCallState(completedStart: Long? = null, refresh: Boolean = false) {
         if (writer != null) {
             val sim = callSimIdentity
             send("CALL", callState, callNumber, callName, callDirection,
@@ -1889,7 +2035,7 @@ class LinkService : Service() {
                 encodeText(sim?.carrier.orEmpty()),
                 verifiedSimSlots.sorted().joinToString(","),
                 (completedStart ?: simCallStartedMs).takeIf { it > 0L }?.toString().orEmpty(),
-                if (callControlsRestricted) "1" else "0")
+                if (callControlsRestricted) "1" else "0", if (refresh) "1" else "")
         }
     }
 
@@ -2048,10 +2194,10 @@ class LinkService : Service() {
      * once connected it keeps the call controls visible even if the Gateway answered,
      * so volume adjustments remain accessible from the Remote.
      */
-    private fun onRemoteCallUpdate(previous: String) {
+    private fun onRemoteCallUpdate(previous: String, newRing: Boolean) {
         when (callState) {
             CALL_RINGING -> {
-                if (previous != CALL_RINGING) {
+                if (newRing) {
                     simCallHere = false
                     simCallOnGateway = false
                     simDialAt = 0L
@@ -2059,7 +2205,7 @@ class LinkService : Service() {
                     if (!callControlsRestricted) startRinging()
                 }
                 if (callControlsRestricted) stopSimRinging()
-                showIncoming()
+                synchronized(ringingLock) { showIncoming() }
             }
             CALL_OFFHOOK -> {
                 stopSimRinging()
@@ -2121,7 +2267,19 @@ class LinkService : Service() {
         }
     }
 
-    private fun startRinging() {
+    @SuppressLint("WakelockTimeout")
+    private fun startRinging() = synchronized(ringingLock) {
+        if (!running || !connected || remoteAlertExpired || ringDeadline != null) return@synchronized
+        val now = SystemClock.elapsedRealtime()
+        val deadline = RemoteRingDeadline(now, peerRefreshesCallState)
+        ringDeadline = deadline
+        // Keep the RFCOMM reader and the expiry timer runnable with the display off.
+        runCatching {
+            ringWakeLock = getSystemService(PowerManager::class.java)
+                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PCL:IncomingCall")
+                ?.apply { acquire(RemoteRingDeadline.MAX_RING_MS + 1_000L) }
+        }.onFailure { Hub.log("Could not keep Remote alert handling awake") }
+        trafficHandler.postDelayed(remoteRingCheck, deadline.nextCheckIn(now))
         try {
             if (ringtone == null) {
                 val r = RingtoneManager.getRingtone(
@@ -2142,7 +2300,17 @@ class LinkService : Service() {
 
     private fun stopSimRinging() = stopRinging()
 
-    private fun stopRinging() {
+    private fun clearRemoteIncomingAlert() {
+        synchronized(ringingLock) {
+            remoteAlertExpired = true
+            stopRinging()
+            runCatching { nm.cancel(ID_INCOMING) }
+        }
+    }
+
+    private fun stopRinging() = synchronized(ringingLock) {
+        trafficHandler.removeCallbacks(remoteRingCheck)
+        ringDeadline = null
         try {
             ringtone?.stop()
         } catch (e: Exception) {
@@ -2152,6 +2320,8 @@ class LinkService : Service() {
             vibrator()?.cancel()
         } catch (e: Exception) {
         }
+        runCatching { ringWakeLock?.let { if (it.isHeld) it.release() } }
+        ringWakeLock = null
     }
 
     @Suppress("DEPRECATION")
@@ -2316,7 +2486,7 @@ class LinkService : Service() {
 
     /** Remote SIM call notification. */
     private fun showIncoming() {
-        if (callControlsRestricted) {
+        if (!running || !connected || remoteAlertExpired || callControlsRestricted) {
             nm.cancel(ID_INCOMING)
             return
         }

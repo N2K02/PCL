@@ -32,6 +32,8 @@ object Protocol {
      *  - 12: bind volume/route commands to the live SIM call instance
      */
     const val VERSION = 12
+    // Optional HELLO capability. Version 12 peers without it still exchange ordinary CALL frames.
+    const val CALL_STATE_REFRESH = "CALL_STATE_REFRESH"
 }
 
 /**
@@ -42,7 +44,7 @@ object Protocol {
 object Commands {
     /** Sent by the Remote; handled only on the Gateway. */
     val GATEWAY_HANDLES = setOf(
-        "ANSWER", "REJECT", "HANGUP", "DIAL", "DIAL_SIM", "CALL_LOG_ACK", "SYNC_CONTACTS",
+        "ANSWER", "REJECT", "HANGUP", "DIAL", "DIAL_SIM", "CALL_LOG_ACK", "SYNC_CONTACTS", "CALL_STATE_QUERY",
         "AUDIO_VOLUME", "AUDIO_STEP", "AUDIO_ROUTE", "AUDIO_QUERY", "AUDIO_MODE"
     )
 
