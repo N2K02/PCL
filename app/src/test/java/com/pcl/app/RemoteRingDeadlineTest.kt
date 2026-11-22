@@ -10,24 +10,33 @@ class RemoteRingDeadlineTest {
     @Test fun capableGatewayMustKeepConfirmingRing() {
         val deadline = RemoteRingDeadline(startedAt = 1_000L, refreshSupported = true)
 
-        assertEquals(2_000L, deadline.nextCheckIn(1_000L))
-        assertFalse(deadline.expired(8_999L))
-        assertTrue(deadline.expired(9_000L))
+        assertEquals(1_000L, deadline.nextCheckIn(1_000L))
+        assertFalse(deadline.expired(3_999L))
+        assertTrue(deadline.expired(4_000L))
 
-        deadline.confirm(9_001L)
-        assertTrue(deadline.expired(9_001L))
+        deadline.confirm(4_001L)
+        assertTrue(deadline.expired(4_001L))
     }
 
     @Test fun freshConfirmationExtendsRingUpToAbsoluteLimit() {
         val deadline = RemoteRingDeadline(startedAt = 0L, refreshSupported = true)
 
-        for (now in 2_000L..88_000L step 2_000L) {
+        for (now in 1_000L..89_000L step 1_000L) {
             deadline.confirm(now)
             assertFalse(deadline.expired(now))
         }
 
         assertEquals(1_000L, deadline.nextCheckIn(89_000L))
         assertTrue(deadline.expired(RemoteRingDeadline.MAX_RING_MS))
+    }
+
+    @Test fun staleStateQueryMustNotExtendThreeSecondDeadline() {
+        val deadline = RemoteRingDeadline(startedAt = 10_000L, refreshSupported = true)
+        deadline.confirm(11_000L)
+        assertFalse(deadline.expired(13_999L))
+        assertTrue(deadline.expired(14_000L))
+        deadline.confirm(14_001L)
+        assertTrue(deadline.expired(14_001L))
     }
 
     @Test fun legacyGatewayKeepsNormalRingingWithAnAbsoluteLimit() {
