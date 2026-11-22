@@ -51,7 +51,9 @@ class GatewayCallCommandPolicyTest {
         val remote = service.substringAfter("private fun onRemoteCallUpdate(")
             .substringBefore("private fun showOngoingCall()")
         val initial = remote.substringAfter("CALL_RINGING -> {").substringBefore("CALL_OFFHOOK -> {")
-        assertTrue(initial.contains("if (previous != CALL_RINGING)"))
+        assertTrue(service.contains("val newRing = nextState == CALL_RINGING &&"))
+        assertTrue(service.contains("(previousState != CALL_RINGING || nextToken != activeCallToken)"))
+        assertTrue(initial.indexOf("if (newRing)") in 0 until initial.indexOf("startRinging()"))
         assertTrue(initial.contains("startRinging()"))
         assertFalse(initial.substringAfter("showIncoming()").contains("startRinging()"))
     }

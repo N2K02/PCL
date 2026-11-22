@@ -7,6 +7,10 @@ internal object GatewayRingStateSync {
         current == LinkService.CALL_RINGING &&
             observed in setOf(LinkService.CALL_OFFHOOK, LinkService.CALL_IDLE)
 
+    /** A subscription event cannot end or answer another line's call. */
+    fun acceptsSubscriptionState(observed: String, aggregate: String?): Boolean =
+        aggregate == observed
+
     /** Do not reopen ringing for a delayed broadcast after an answered call. */
     fun isStaleRingingAfterAnswer(current: String, observed: String?): Boolean =
         current == LinkService.CALL_OFFHOOK && observed == LinkService.CALL_OFFHOOK

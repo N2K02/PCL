@@ -64,7 +64,10 @@ class GatewayRingStateSyncTest {
         // The lock-screen incoming UI closes once the call is no longer ringing here.
         val incoming = read("IncomingCallActivity.kt")
         assertTrue(incoming.contains("service.currentIncomingToken() != presentedToken"))
-        assertTrue(service.contains("role == ROLE_REMOTE && callState == CALL_RINGING && !callControlsRestricted"))
+        val tokenCheck = service.substringAfter("fun currentIncomingToken()")
+            .substringBefore("fun answerForCall(")
+        assertTrue(tokenCheck.contains("role == ROLE_REMOTE && connected && callState == CALL_RINGING"))
+        assertTrue(tokenCheck.contains("!callControlsRestricted && !remoteAlertExpired"))
     }
 
 
@@ -72,7 +75,9 @@ class GatewayRingStateSyncTest {
         val path = "app/src/main/java/com/pcl/app/LinkService.kt"
         val src = listOf(File(path), File("../$path")).first { it.isFile }.readText()
         assertTrue(src.contains("TelephonyCallback.CallStateListener"))
-        assertTrue(src.contains("telephony.registerTelephonyCallback(mainExecutor, callback)"))
+        assertTrue(src.contains("telephony.createForSubscriptionId(id)"))
+        assertTrue(src.contains("manager.registerTelephonyCallback(mainExecutor, callback)"))
+        assertTrue(src.contains("manager.unregisterTelephonyCallback(callback)"))
         assertTrue(src.contains("registerGatewayCallStateCallback()"))
         assertTrue(src.contains("unregisterGatewayCallStateCallback()"))
         assertTrue(src.contains("TelephonyManager.CALL_STATE_OFFHOOK -> CALL_OFFHOOK"))
@@ -85,6 +90,13 @@ class GatewayRingStateSyncTest {
             .substringBefore("private fun showOngoingCall(")
         assertTrue(remote.contains("CALL_OFFHOOK -> {\\n                stopSimRinging()".replace("\\n", "\n")))
         assertTrue(remote.contains("else -> {\\n                simCallHere = false".replace("\\n", "\n")))
+    }
+
+    @Test fun subscriptionEventsCannotClearRingingForAnotherSim() {
+        assertFalse(GatewayRingStateSync.acceptsSubscriptionState(LinkService.CALL_IDLE, LinkService.CALL_RINGING))
+        assertFalse(GatewayRingStateSync.acceptsSubscriptionState(LinkService.CALL_OFFHOOK, LinkService.CALL_RINGING))
+        assertFalse(GatewayRingStateSync.acceptsSubscriptionState(LinkService.CALL_OFFHOOK, null))
+        assertTrue(GatewayRingStateSync.acceptsSubscriptionState(LinkService.CALL_OFFHOOK, LinkService.CALL_OFFHOOK))
     }
 
     @Test fun serviceStopsRingBeforeWritingHistoryAndCancelsWatchdogOnQuit() {
