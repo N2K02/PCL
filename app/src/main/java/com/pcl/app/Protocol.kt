@@ -34,6 +34,8 @@ object Protocol {
     const val VERSION = 12
     // Optional HELLO capability. Version 12 peers without it still exchange ordinary CALL frames.
     const val CALL_STATE_REFRESH = "CALL_STATE_REFRESH"
+    // Optional HELLO extension: only correlated query responses refresh ring liveness.
+    const val CALL_STATE_REFRESH_ID = "CALL_STATE_REFRESH_ID"
 }
 
 /**
