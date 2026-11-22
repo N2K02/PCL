@@ -19,7 +19,7 @@ internal class RemoteRingDeadline(startedAt: Long, val refreshSupported: Boolean
 
     companion object {
         const val MAX_RING_MS = 90_000L
-        private const val STATE_TIMEOUT_MS = 8_000L
-        private const val QUERY_INTERVAL_MS = 2_000L
+        private const val STATE_TIMEOUT_MS = 3_000L
+        private const val QUERY_INTERVAL_MS = 1_000L
     }
 }
