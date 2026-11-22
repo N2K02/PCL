@@ -553,6 +553,8 @@ class LinkService : Service() {
     // query them on the Bluetooth reader or the phone-state broadcast thread.
     private val contactsExecutor = Executors.newSingleThreadExecutor()
     private val phoneDataExecutor = Executors.newSingleThreadExecutor()
+    // Keep liveness checks off the main thread and independent from slow contacts I/O.
+    private val callStateExecutor = Executors.newSingleThreadExecutor()
     @Volatile private var verifiedSimSlots: Set<Int> = emptySet()
     // Optional CallLog I/O must never delay Bluetooth command processing.
     private val callLogExecutor = ThreadPoolExecutor(
@@ -563,6 +565,9 @@ class LinkService : Service() {
     private var gatewaySubscriptionsListener: SubscriptionManager.OnSubscriptionsChangedListener? = null
     private var bluetoothReceiverRegistered = false
     @Volatile private var peerRefreshesCallState = false
+    @Volatile private var peerSupportsQueryIds = false
+    private var ringQuerySequence = 0L
+    private var pendingRingQueryId = 0L
     @Volatile private var remoteAlertExpired = false
     private val ringingLock = Any()
     private var ringDeadline: RemoteRingDeadline? = null
@@ -592,7 +597,10 @@ class LinkService : Service() {
                     clearRemoteIncomingAlert()
                     Hub.log("Remote ringing stopped: Gateway state no longer confirmed")
                 } else {
-                    if (deadline.refreshSupported) send("CALL_STATE_QUERY")
+                    if (deadline.refreshSupported && peerSupportsQueryIds) {
+                        pendingRingQueryId = ++ringQuerySequence
+                        send("CALL_STATE_QUERY", pendingRingQueryId.toString())
+                    }
                     trafficHandler.postDelayed(this, deadline.nextCheckIn(now))
                 }
             }
@@ -658,6 +666,7 @@ class LinkService : Service() {
         io.shutdownNow()
         contactsExecutor.shutdownNow()
         phoneDataExecutor.shutdownNow()
+        callStateExecutor.shutdownNow()
         callLogExecutor.shutdownNow()
         Hub.service = null
         Hub.notifyUi()
@@ -1079,12 +1088,14 @@ class LinkService : Service() {
             peerProtocol = null
             peerAppVersion = ""
             peerRefreshesCallState = false
+            peerSupportsQueryIds = false
             clearPendingCall()
             // The Gateway's first CALL after a fresh Remote session is a snapshot,
             // not evidence of a newly started ringing or outgoing call. This also
             // protects process recreation where no disconnect callback ran.
             if (role == ROLE_REMOTE) CallHistory.onLinkLost()
-            send("HELLO", role, Protocol.VERSION.toString(), appVersion, Protocol.CALL_STATE_REFRESH)
+            send("HELLO", role, Protocol.VERSION.toString(), appVersion,
+                Protocol.CALL_STATE_REFRESH, Protocol.CALL_STATE_REFRESH_ID)
             if (role == ROLE_GATEWAY) {
                 sendCallState()
                 sendContactsFingerprint()
@@ -1118,6 +1129,7 @@ class LinkService : Service() {
                 contactBuf = null
                 expectedContactHash = null
                 helloReceived = false
+                peerSupportsQueryIds = false
                 if (role == ROLE_REMOTE) {
                     if (callControlError?.startsWith("PENDING:") == true) callControlError = "FAILED: Connection lost before Gateway confirmation"
                     clearPendingCall()
@@ -1302,6 +1314,8 @@ class LinkService : Service() {
                 peerProtocol = p.getOrNull(2)?.toIntOrNull()
                 peerAppVersion = p.getOrNull(3).orEmpty().take(20)
                 peerRefreshesCallState = p.getOrNull(4) == Protocol.CALL_STATE_REFRESH
+                peerSupportsQueryIds = peerRefreshesCallState &&
+                    p.getOrNull(5) == Protocol.CALL_STATE_REFRESH_ID
                 helloReceived = CallControlProtocol.peerRoleMatches(role, arg1)
                 Hub.log("Peer is the $arg1 phone (PCL ${peerAppVersion.ifEmpty { "older version" }})")
                 versionWarning?.let { Hub.log("Version mismatch: $it") }
@@ -1328,7 +1342,13 @@ class LinkService : Service() {
                 val refresh = p.getOrNull(11) == "1"
                 if (refresh && previousState == CALL_RINGING && nextState == CALL_RINGING &&
                     nextToken == activeCallToken && restricted == callControlsRestricted) {
-                    synchronized(ringingLock) { ringDeadline?.confirm(SystemClock.elapsedRealtime()) }
+                    val responseId = p.getOrNull(12)?.toLongOrNull()
+                    synchronized(ringingLock) {
+                        if (peerSupportsQueryIds && responseId != null &&
+                            responseId > 0L && responseId == pendingRingQueryId) {
+                            ringDeadline?.confirm(SystemClock.elapsedRealtime())
+                        }
+                    }
                     return
                 }
                 val newRing = nextState == CALL_RINGING &&
@@ -1434,16 +1454,26 @@ class LinkService : Service() {
             "AUDIO_QUERY" -> gatewayAudioStatus()
             "CALL_STATE_QUERY" -> {
                 if (!peerRefreshesCallState) return
+                val requestId = arg1.toLongOrNull()?.takeIf { it > 0L }
                 val session = writer
-                trafficHandler.post {
-                    if (running && connected && session != null && writer === session) {
-                        val observed = currentGatewayPhoneState() ?: return@post
-                        when {
-                            observed == callState -> sendCallState(refresh = true)
-                            callState != CALL_IDLE || observed == CALL_RINGING ->
-                                applyGatewayPhoneState(observed, null)
+                val sessionGeneration = generation
+                try {
+                    callStateExecutor.execute {
+                        val observed = currentGatewayPhoneState()
+                        trafficHandler.post {
+                            if (!running || !connected || session == null ||
+                                writer !== session || generation != sessionGeneration ||
+                                observed == null) return@post
+                            when {
+                                observed == callState -> sendCallState(refresh = true,
+                                    queryId = if (peerSupportsQueryIds) requestId else null)
+                                callState != CALL_IDLE || observed == CALL_RINGING ->
+                                    applyGatewayPhoneState(observed, null)
+                            }
                         }
                     }
+                } catch (_: RejectedExecutionException) {
+                    Hub.log("Gateway call-state query unavailable during shutdown")
                 }
             }
             "AUDIO_MODE" -> if (gatewayAudioCommandAllowed(p.getOrNull(3), "MODE",
@@ -2041,7 +2071,8 @@ class LinkService : Service() {
             android.util.Base64.NO_WRAP or android.util.Base64.URL_SAFE), Charsets.UTF_8)
     } catch (_: Exception) { "" }
 
-    private fun sendCallState(completedStart: Long? = null, refresh: Boolean = false) {
+    private fun sendCallState(completedStart: Long? = null, refresh: Boolean = false,
+                              queryId: Long? = null) {
         if (writer != null) {
             val sim = callSimIdentity
             send("CALL", callState, callNumber, callName, callDirection,
@@ -2049,7 +2080,8 @@ class LinkService : Service() {
                 encodeText(sim?.carrier.orEmpty()),
                 verifiedSimSlots.sorted().joinToString(","),
                 (completedStart ?: simCallStartedMs).takeIf { it > 0L }?.toString().orEmpty(),
-                if (callControlsRestricted) "1" else "0", if (refresh) "1" else "")
+                if (callControlsRestricted) "1" else "0", if (refresh) "1" else "",
+                if (refresh) queryId?.toString().orEmpty() else "")
         }
     }
 
@@ -2287,6 +2319,7 @@ class LinkService : Service() {
         val now = SystemClock.elapsedRealtime()
         val deadline = RemoteRingDeadline(now, peerRefreshesCallState)
         ringDeadline = deadline
+        pendingRingQueryId = 0L
         // Keep the RFCOMM reader and the expiry timer runnable with the display off.
         runCatching {
             ringWakeLock = getSystemService(PowerManager::class.java)
@@ -2325,6 +2358,7 @@ class LinkService : Service() {
     private fun stopRinging() = synchronized(ringingLock) {
         trafficHandler.removeCallbacks(remoteRingCheck)
         ringDeadline = null
+        pendingRingQueryId = 0L
         try {
             ringtone?.stop()
         } catch (e: Exception) {
