@@ -91,6 +91,7 @@ class RemoteRingDeadlineTest {
         assertTrue(query.indexOf("currentGatewayPhoneState()") < query.indexOf("trafficHandler.post"))
         assertTrue(service.contains("sessionGeneration"))
         assertTrue(service.contains("writer !== session"))
+        assertTrue(service.contains("writer !== sessionWriter || generation != sessionGeneration"))
         assertTrue(service.contains("confirmQuery(responseId, pendingRingQueryId"))
     }
 
