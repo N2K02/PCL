@@ -42,7 +42,7 @@ class RemoteRingDeadlineTest {
     @Test fun legacyGatewayKeepsNormalRingingWithAnAbsoluteLimit() {
         val deadline = RemoteRingDeadline(startedAt = 0L, refreshSupported = false)
 
-        assertEquals(RemoteRingDeadline.MAX_RING_MS, deadline.nextCheckIn(0L))
+        assertEquals(1_000L, deadline.nextCheckIn(0L))
         assertFalse(deadline.expired(8_000L))
         assertTrue(deadline.expired(RemoteRingDeadline.MAX_RING_MS))
     }
@@ -61,6 +61,8 @@ class RemoteRingDeadlineTest {
         assertTrue(receiver.contains("BluetoothDevice.ACTION_ACL_DISCONNECTED"))
         assertTrue(receiver.contains("BluetoothAdapter.STATE_TURNING_OFF"))
         assertTrue(receiver.contains("device == session.remoteDevice"))
+        assertTrue(service.contains("private fun remoteBluetoothAvailable()"))
+        assertTrue(service.contains("!remoteBluetoothAvailable() || deadline.expired(now)"))
         assertTrue(receiver.indexOf("clearRemoteIncomingAlert()") in 0 until receiver.indexOf("session.close()"))
         assertTrue(alert.contains("ringtone?.stop()"))
         assertTrue(alert.contains("vibrator()?.cancel()"))
