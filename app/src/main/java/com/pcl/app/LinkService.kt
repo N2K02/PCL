@@ -1125,7 +1125,7 @@ class LinkService : Service() {
                 if (!alive(gen) || !connected || socket !== s) break
                 rxTotal.addAndGet(len.toLong() + 5L)
                 when (type) {
-                    Protocol.TYPE_CMD -> handleCommand(String(data, Charsets.UTF_8))
+                    Protocol.TYPE_CMD -> handleCommand(String(data, Charsets.UTF_8), w, gen)
                 }
             }
         } finally {
@@ -1311,7 +1311,9 @@ class LinkService : Service() {
         }
     }
 
-    private fun handleCommand(msg: String) {
+    private fun handleCommand(msg: String, sessionWriter: FrameWriter, sessionGeneration: Int) {
+        // A previously blocked reader must never mutate the newly connected session.
+        if (!running || !connected || writer !== sessionWriter || generation != sessionGeneration) return
         val p = msg.split("|")
         val cmd = p[0]
         val arg1 = p.getOrElse(1) { "" }
