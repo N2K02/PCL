@@ -53,6 +53,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Runs on both phones.
@@ -615,16 +616,30 @@ class LinkService : Service() {
         callControlsRestricted = SimCallConcurrencyPolicy.shouldBlock(callWaitingSeen, multipleActiveSimCalls)
     }
 
+    private val gatewayRecheckInFlight = AtomicBoolean(false)
+
     /** Gateway: recover phone-state transitions missed by the Android broadcast. */
     private val gatewayPhoneStateRecheck = object : Runnable {
         override fun run() {
             if (!running || role != ROLE_GATEWAY || callState == CALL_IDLE) return
-            val observed = currentGatewayPhoneState()
-            if (SimCallConcurrencyPolicy.shouldRecheck(callState, observed, callWaitingSeen)) {
-                Hub.log("Reconciled SIM phone-state transition: $observed")
-                applyGatewayPhoneState(observed!!, null)
-            } else {
-                scheduleGatewayPhoneStateRecheck()
+            if (!gatewayRecheckInFlight.compareAndSet(false, true)) return
+            val sessionGeneration = generation
+            try {
+                callStateExecutor.execute {
+                    val observed = currentGatewayPhoneState()
+                    trafficHandler.post {
+                        gatewayRecheckInFlight.set(false)
+                        if (!running || generation != sessionGeneration || role != ROLE_GATEWAY) return@post
+                        if (SimCallConcurrencyPolicy.shouldRecheck(callState, observed, callWaitingSeen)) {
+                            Hub.log("Reconciled SIM phone-state transition: $observed")
+                            applyGatewayPhoneState(observed!!, null)
+                        } else {
+                            scheduleGatewayPhoneStateRecheck()
+                        }
+                    }
+                }
+            } catch (_: RejectedExecutionException) {
+                gatewayRecheckInFlight.set(false)
             }
         }
     }
@@ -1219,6 +1234,7 @@ class LinkService : Service() {
         callLogExecutor.queue.clear()
         trafficHandler.removeCallbacks(trafficSampler)
         trafficHandler.removeCallbacks(gatewayPhoneStateRecheck)
+        gatewayRecheckInFlight.set(false)
         downloadBytesPerSecond = 0L; uploadBytesPerSecond = 0L
         generation++
         try {
