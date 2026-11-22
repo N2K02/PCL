@@ -1,9 +1,12 @@
 package com.pcl.app
 
-/** Bounds local alerting without changing the Gateway's call state or history. */
+/** Bounds local alerting without changing the Gateway's call state or history.
+ * A peer without call-state refresh cannot prove liveness, so its alert fails closed
+ * after three seconds instead of potentially ringing on a dead Bluetooth session.
+ */
 internal class RemoteRingDeadline(startedAt: Long, val refreshSupported: Boolean) {
     private val maxUntil = startedAt + MAX_RING_MS
-    private var confirmedUntil = if (refreshSupported) startedAt + STATE_TIMEOUT_MS else maxUntil
+    private var confirmedUntil = startedAt + STATE_TIMEOUT_MS
 
     fun confirm(now: Long) {
         if (!expired(now) && refreshSupported) {
