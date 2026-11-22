@@ -14,7 +14,7 @@ internal class RemoteRingDeadline(startedAt: Long, val refreshSupported: Boolean
     fun expired(now: Long): Boolean = now >= confirmedUntil
 
     fun nextCheckIn(now: Long): Long =
-        minOf(confirmedUntil - now, if (refreshSupported) QUERY_INTERVAL_MS else MAX_RING_MS)
+        minOf(confirmedUntil - now, QUERY_INTERVAL_MS)
             .coerceAtLeast(0L)
 
     companion object {
