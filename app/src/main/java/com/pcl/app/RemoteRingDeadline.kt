@@ -14,6 +14,14 @@ internal class RemoteRingDeadline(startedAt: Long, val refreshSupported: Boolean
         }
     }
 
+    /** Reject delayed, duplicated, or unrelated heartbeat acknowledgements. */
+    fun confirmQuery(responseId: Long?, pendingId: Long, now: Long): Boolean {
+        if (!refreshSupported || responseId == null || responseId <= 0L ||
+            responseId != pendingId || expired(now)) return false
+        confirm(now)
+        return true
+    }
+
     fun expired(now: Long): Boolean = now >= confirmedUntil
 
     fun nextCheckIn(now: Long): Long =
