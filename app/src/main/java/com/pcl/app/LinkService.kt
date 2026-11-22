@@ -1344,9 +1344,9 @@ class LinkService : Service() {
                     nextToken == activeCallToken && restricted == callControlsRestricted) {
                     val responseId = p.getOrNull(12)?.toLongOrNull()
                     synchronized(ringingLock) {
-                        if (peerSupportsQueryIds && responseId != null &&
-                            responseId > 0L && responseId == pendingRingQueryId) {
-                            ringDeadline?.confirm(SystemClock.elapsedRealtime())
+                        if (peerSupportsQueryIds) {
+                            ringDeadline?.confirmQuery(responseId, pendingRingQueryId,
+                                SystemClock.elapsedRealtime())
                         }
                     }
                     return
