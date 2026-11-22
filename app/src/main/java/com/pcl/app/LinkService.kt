@@ -768,7 +768,7 @@ class LinkService : Service() {
         val action = intent.action.orEmpty()
         return role == ROLE_REMOTE && token > 0L && activeCallToken == token &&
             !callControlsRestricted && when (action) {
-                ACTION_ANSWER, ACTION_REJECT -> callState == CALL_RINGING
+                ACTION_ANSWER, ACTION_REJECT -> currentIncomingToken() == token
                 ACTION_HANGUP, ACTION_AUDIO_DOWN, ACTION_AUDIO_UP, ACTION_AUDIO_SPEAKER ->
                     callState == CALL_OFFHOOK
                 else -> false

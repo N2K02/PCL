@@ -64,7 +64,10 @@ class GatewayRingStateSyncTest {
         // The lock-screen incoming UI closes once the call is no longer ringing here.
         val incoming = read("IncomingCallActivity.kt")
         assertTrue(incoming.contains("service.currentIncomingToken() != presentedToken"))
-        assertTrue(service.contains("role == ROLE_REMOTE && callState == CALL_RINGING && !callControlsRestricted"))
+        val tokenCheck = service.substringAfter("fun currentIncomingToken()")
+            .substringBefore("fun answerForCall(")
+        assertTrue(tokenCheck.contains("role == ROLE_REMOTE && connected && callState == CALL_RINGING"))
+        assertTrue(tokenCheck.contains("!callControlsRestricted && !remoteAlertExpired"))
     }
 
 

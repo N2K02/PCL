@@ -60,7 +60,7 @@ class SimRuntimeIntegrationTest {
         assertTrue(reader.contains("if (writer === w) {"))
         val ownerGuard = reader.substringAfter("if (writer === w) {")
         assertTrue(ownerGuard.indexOf("connected = false") > ownerGuard.indexOf("writer = null"))
-        assertTrue(ownerGuard.contains("stopRinging()"))
+        assertTrue(ownerGuard.indexOf("clearRemoteIncomingAlert()") in 0 until ownerGuard.indexOf("CallHistory.onLinkLost()"))
         assertTrue(service.contains("if (serverSocket === ss) serverSocket = null"))
         assertTrue(service.contains("private fun connectOnce(gen: Int)"))
     }
