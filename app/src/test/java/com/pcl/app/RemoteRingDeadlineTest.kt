@@ -39,12 +39,21 @@ class RemoteRingDeadlineTest {
         assertTrue(deadline.expired(14_001L))
     }
 
-    @Test fun legacyGatewayKeepsNormalRingingWithAnAbsoluteLimit() {
+    @Test fun legacyGatewayWithoutHeartbeatStopsAfterThreeSeconds() {
         val deadline = RemoteRingDeadline(startedAt = 0L, refreshSupported = false)
 
         assertEquals(1_000L, deadline.nextCheckIn(0L))
-        assertFalse(deadline.expired(8_000L))
-        assertTrue(deadline.expired(RemoteRingDeadline.MAX_RING_MS))
+        assertFalse(deadline.expired(2_999L))
+        assertTrue(deadline.expired(3_000L))
+        deadline.confirm(1_000L)
+        assertTrue(deadline.expired(3_000L))
+    }
+
+    @Test fun confirmedGatewayHeartbeatStopsAfterThreeSecondsOfSilence() {
+        val deadline = RemoteRingDeadline(startedAt = 0L, refreshSupported = true)
+        deadline.confirm(2_000L)
+        assertFalse(deadline.expired(4_999L))
+        assertTrue(deadline.expired(5_000L))
     }
 
     @Test fun bothBluetoothLossPathsStopAlertIndependentlyOfLockScreen() {
