@@ -569,12 +569,26 @@ class LinkService : Service() {
     private var ringWakeLock: PowerManager.WakeLock? = null
     private var ringtone: Ringtone? = null
 
+    /** Fail closed if a Bluetooth-off broadcast is missed while the Remote is ringing.
+     * BluetoothSocket.isConnected does not itself prove link liveness; the Gateway's
+     * call-state confirmations provide the separate three-second liveness bound.
+     */
+    @SuppressLint("MissingPermission")
+    private fun remoteBluetoothAvailable(): Boolean {
+        if (!connected || socket?.isConnected != true) return false
+        return try {
+            getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true
+        } catch (_: SecurityException) {
+            false
+        }
+    }
+
     private val remoteRingCheck = object : Runnable {
         override fun run() {
             synchronized(ringingLock) {
                 val deadline = ringDeadline ?: return
                 val now = SystemClock.elapsedRealtime()
-                if (!running || !connected || deadline.expired(now)) {
+                if (!running || !remoteBluetoothAvailable() || deadline.expired(now)) {
                     clearRemoteIncomingAlert()
                     Hub.log("Remote ringing stopped: Gateway state no longer confirmed")
                 } else {
