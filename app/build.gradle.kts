@@ -67,7 +67,7 @@ android {
 }
 
 dependencies {
-    val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
+    val composeBom = platform("androidx.compose:compose-bom:2026.11.01")
     implementation(composeBom)
     androidTestImplementation(composeBom)
     implementation("androidx.activity:activity-compose:1.9.2")
@@ -81,8 +81,8 @@ dependencies {
 
  // Opt-in compile-only shared library evaluation; no production runtime cutover.
 dependencies {
-    implementation("dev.n2k02:theme:0.1.14")
-        implementation("dev.n2k02:updater:0.1.36")
+    implementation("dev.n2k02:theme:0.1.15")
+        implementation("dev.n2k02:updater:0.1.39")
     testImplementation("junit:junit:4.13.2")
 }
 
